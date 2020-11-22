@@ -1,0 +1,12 @@
+[submodule "esp-homekit"]
+	path = esp-homekit
+	url = https://github.com/HomeACcessoryKid/esp-homekit
+[submodule "esp-wolfssl"]
+	path = esp-wolfssl
+	url = https://github.com/HomeACcessoryKid/esp-wolfssl
+[submodule "esp-cjson"]
+	path = esp-cjson
+	url = https://github.com/HomeACcessoryKid/esp-cjson
+[submodule "UDPlogger"]
+	path = UDPlogger
+	url = https://github.com/HomeACcessoryKid/UDPlogger
