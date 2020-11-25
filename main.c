@@ -28,6 +28,12 @@
  #error You must set VERSION=x.y.z to match github version tag x.y.z
 #endif
 
+#ifndef OT_SEND_PIN
+ #error OT_SEND_PIN is not specified
+#endif
+#ifndef OT_RECV_PIN
+ #error OT_RECV_PIN is not specified
+#endif
 #ifndef SENSOR_PIN
  #error SENSOR_PIN is not specified
 #endif
@@ -82,6 +88,43 @@ void identify(homekit_value_t _value) {
 
 /* ============== END HOMEKIT CHARACTERISTIC DECLARATIONS ================================================================= */
 
+#define bithigh gpio_write(OT_SEND_PIN,0)
+#define bitlow  gpio_write(OT_SEND_PIN,1)
+#define bit(n)  do {if (n) {bithigh; sdk_os_delay_us(500); bitlow; sdk_os_delay_us(500);} \
+                    else   {bitlow; sdk_os_delay_us(500); bithigh; sdk_os_delay_us(500);} \
+                } while (0)
+
+void send_OT_frame(int payload) {
+    printf("SENDING: %8x\n",payload);
+    bit(1);
+    for (int i=31;i>=0;i--) bit(payload&(1<<i));
+    bit(1);
+}
+
+void test_task(void *argv) {
+    while(1) {
+        printf("RECEIVED: %s\n",gpio_read(OT_RECV_PIN)?"HIGH":"LOW");
+        switch (tgt_heat2.value.int_value) {
+            case 0:
+                bitlow;
+                break;
+            case 1:
+                bithigh;
+                break;
+            case 2:
+                //generate a command pattern status set/read
+                send_OT_frame( 0x0030 );
+                break;
+            case 3:
+                //generate a command pattern read slave configuration flags
+                send_OT_frame( 0x0300 );
+                break;
+            default:
+                break;
+        }
+        vTaskDelay(1000/portTICK_PERIOD_MS);
+    }
+}
 
 #define NAN (0.0F/0.0F)
 #define SENSORS 4
@@ -89,48 +132,48 @@ void identify(homekit_value_t _value) {
 void temp_task(void *argv) {
     ds18b20_addr_t addrs[SENSORS];
     float temps[SENSORS];
-    float temp[SENSORS];
-    float old_t[SENSORS];
+    float temp[16]; //using id as a single hex digit, then hardcode which sensor gets which meaning
+    float old_t1,old_t2,old_t3,old_t4;
     int sensor_count=0,id,j;
 
     while( (sensor_count=ds18b20_scan_devices(SENSOR_PIN, addrs, SENSORS)) != SENSORS) {
-        vTaskDelay(2000/portTICK_PERIOD_MS);
+        vTaskDelay(BEAT*1000/portTICK_PERIOD_MS);
         UDPLUS("Only found %d sensors\n",sensor_count);
     }
 
     while(1) {
         ds18b20_measure_and_read_multi(SENSOR_PIN, addrs, SENSORS, temps);
         for (j = 0; j < SENSORS; j++) {
-            // The DS18B20 address is a 64-bit integer
-            // I have manually selected 4 units that have id 0, 1, 2 and 3 using the second hex digit
+            // The DS18B20 address 64-bit and my batch turns out family C on https://github.com/cpetrich/counterfeit_DS18B20
+            // I have manually selected that I have unique ids using the second hex digit of CRC
             id = (addrs[j]>>56)&0xF;
             temp[id] = temps[j];
             printf("  Sensor %x reports %2.4f deg C\n", id, temps[j] );
         }
 
-        old_t[0]=cur_temp1.value.float_value; //TODO: do we need to test for changed values or is that embedded in notify routine?
-        old_t[1]=cur_temp2.value.float_value;
-        old_t[2]=cur_temp3.value.float_value;
-        old_t[3]=cur_temp4.value.float_value;
-        cur_temp1.value.float_value=isnan(temp[0])?100.0F:(float)(int)(temp[0]*2+0.5)/2;
+        old_t1=cur_temp1.value.float_value; //TODO: do we need to test for changed values or is that embedded in notify routine?
+        old_t2=cur_temp2.value.float_value;
+        old_t3=cur_temp3.value.float_value;
+        old_t4=cur_temp4.value.float_value;
+        cur_temp1.value.float_value=isnan(temp[0])?100.0F:(float)(int)(temp[0]*2+0.5)/2; //TODO: isnan implicit declaration error in compiler?
         cur_temp2.value.float_value=isnan(temp[1])?100.0F:(float)(int)(temp[1]*2+0.5)/2;
         cur_temp3.value.float_value=isnan(temp[2])?100.0F:(float)(int)(temp[2]*2+0.5)/2;
         cur_temp4.value.float_value=isnan(temp[3])?100.0F:(float)(int)(temp[3]*2+0.5)/2;
         printf("temp1=%1.1f  temp2=%1.1f  temp3=%1.1f  temp4=%1.1f", \
             cur_temp1.value.float_value,cur_temp2.value.float_value,cur_temp3.value.float_value,cur_temp4.value.float_value);
-        if (old_t[0]!=cur_temp1.value.float_value) {
+        if (old_t1!=cur_temp1.value.float_value) {
             printf("  notify1");
             homekit_characteristic_notify(&cur_temp1,HOMEKIT_FLOAT(cur_temp1.value.float_value));
         }
-        if (old_t[1]!=cur_temp2.value.float_value) {
+        if (old_t2!=cur_temp2.value.float_value) {
             printf("  notify2");
             homekit_characteristic_notify(&cur_temp2,HOMEKIT_FLOAT(cur_temp2.value.float_value));
         }
-        if (old_t[2]!=cur_temp3.value.float_value) {
+        if (old_t3!=cur_temp3.value.float_value) {
             printf("  notify3");
             homekit_characteristic_notify(&cur_temp3,HOMEKIT_FLOAT(cur_temp3.value.float_value));
         }
-        if (old_t[3]!=cur_temp4.value.float_value) {
+        if (old_t4!=cur_temp4.value.float_value) {
             printf("  notify4");
             homekit_characteristic_notify(&cur_temp4,HOMEKIT_FLOAT(cur_temp4.value.float_value));
         }
@@ -165,10 +208,12 @@ void device_init() {
 //     adv_button_register_callback_fn(BUTTON_PIN, singlepress_callback, 1, NULL);
 //     adv_button_register_callback_fn(BUTTON_PIN, doublepress_callback, 2, NULL);
 //     adv_button_register_callback_fn(BUTTON_PIN, longpress_callback, 3, NULL);
+    gpio_enable(OT_RECV_PIN, GPIO_INPUT);
+    gpio_enable(OT_SEND_PIN, GPIO_OUTPUT); gpio_write(OT_SEND_PIN, 1);
 //     gpio_enable(LED_PIN, GPIO_OUTPUT); gpio_write(LED_PIN, 0);
-//     gpio_enable( RELAY_PIN, GPIO_OUTPUT); gpio_write( RELAY_PIN, 1);
     gpio_set_pullup(SENSOR_PIN, true, true);
     xTaskCreate(temp_task, "Temp", 512, NULL, 1, NULL);
+    xTaskCreate(test_task, "Test", 512, NULL, 1, NULL);
 }
 
 homekit_accessory_t *accessories[] = {
