@@ -95,7 +95,7 @@ void identify(homekit_value_t _value) {
                 } while (0)
 
 void send_OT_frame(int payload) {
-    printf("SENDING: %8x\n",payload);
+    printf("SENDING: %08x\n",payload);
     bit(1);
     for (int i=31;i>=0;i--) bit(payload&(1<<i));
     bit(1);
@@ -113,11 +113,11 @@ void test_task(void *argv) {
                 break;
             case 2:
                 //generate a command pattern status set/read
-                send_OT_frame( 0x0030 );
+                send_OT_frame( 0x00000300 );
                 break;
             case 3:
                 //generate a command pattern read slave configuration flags
-                send_OT_frame( 0x0300 );
+                send_OT_frame( 0x00030000 );
                 break;
             default:
                 break;
