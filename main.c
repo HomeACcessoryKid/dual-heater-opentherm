@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <espressif/esp_wifi.h>
 #include <espressif/esp_sta.h>
-//#include <espressif/esp_system.h> //for timestamp report only
+#include <espressif/esp_system.h> //for timestamp report only
 #include <esp/uart.h>
 #include <esp8266.h>
 #include <FreeRTOS.h>
@@ -101,9 +101,15 @@ void send_OT_frame(int payload) {
     bit(1);
 }
 
+uint32_t times[1000], oldtime=0;
+int      level[1000], idx=0;
 void test_task(void *argv) {
     while(1) {
-        printf("RECEIVED: %s\n",gpio_read(OT_RECV_PIN)?"HIGH":"LOW");
+        for (int i=0;i<idx;i++) {
+            printf("%10d %d +%d\n",times[i], level[i], times[i]-oldtime);
+            oldtime=times[i];
+        }
+        idx=0;
         switch (tgt_heat2.value.int_value) {
             case 0:
                 bitlow;
@@ -124,6 +130,11 @@ void test_task(void *argv) {
         }
         vTaskDelay(1000/portTICK_PERIOD_MS);
     }
+}
+
+static void handle_rx(uint8_t interrupted_pin) {
+    times[idx]=sdk_system_get_time();
+    level[idx++]=gpio_read(OT_RECV_PIN);
 }
 
 #define NAN (0.0F/0.0F)
@@ -209,6 +220,7 @@ void device_init() {
 //     adv_button_register_callback_fn(BUTTON_PIN, doublepress_callback, 2, NULL);
 //     adv_button_register_callback_fn(BUTTON_PIN, longpress_callback, 3, NULL);
     gpio_enable(OT_RECV_PIN, GPIO_INPUT);
+    gpio_set_interrupt(OT_RECV_PIN, GPIO_INTTYPE_EDGE_ANY, handle_rx);
     gpio_enable(OT_SEND_PIN, GPIO_OUTPUT); gpio_write(OT_SEND_PIN, 1);
 //     gpio_enable(LED_PIN, GPIO_OUTPUT); gpio_write(LED_PIN, 0);
     gpio_set_pullup(SENSOR_PIN, true, true);
