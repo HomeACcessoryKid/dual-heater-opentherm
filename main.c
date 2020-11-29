@@ -15,6 +15,7 @@
 #include <esp8266.h>
 #include <FreeRTOS.h>
 #include <task.h>
+#include <semphr.h>
 #include <homekit/homekit.h>
 #include <homekit/characteristics.h>
 #include <string.h>
@@ -101,15 +102,15 @@ void send_OT_frame(int payload) {
     bit(1);
 }
 
-uint32_t times[1000], oldtime=0;
-int      level[1000], idx=0;
+#define  READY 0
+#define  START 1
+#define  RECV  2
+static QueueHandle_t xQueue;
+int      resp_idx=0, rx_state=0;
+uint32_t response=0, before=0;
 void test_task(void *argv) {
+    uint32_t answer;
     while(1) {
-        for (int i=0;i<idx;i++) {
-            printf("%10d %d +%d\n",times[i], level[i], times[i]-oldtime);
-            oldtime=times[i];
-        }
-        idx=0;
         switch (tgt_heat2.value.int_value) {
             case 0:
                 bitlow;
@@ -128,13 +129,47 @@ void test_task(void *argv) {
             default:
                 break;
         }
-        vTaskDelay(1000/portTICK_PERIOD_MS);
+        if (xQueueReceive(xQueue, &(answer), (TickType_t)840/portTICK_PERIOD_MS) == pdTRUE) {
+            printf("ANSWER: %08x\n",answer);
+        }
+        printf("response:%08x idx:%d\n",response,resp_idx);
+        vTaskDelay(100/portTICK_PERIOD_MS);
     }
 }
 
 static void handle_rx(uint8_t interrupted_pin) {
-    times[idx]=sdk_system_get_time();
-    level[idx++]=gpio_read(OT_RECV_PIN);
+    BaseType_t xHigherPriorityTaskWoken=pdFALSE;
+    uint32_t now=sdk_system_get_time(),delta=now-before;
+    int     even=0, inv_read=gpio_read(OT_RECV_PIN);//note that gpio_read gives the inverted value of the symbol
+    if (rx_state==READY) {
+        if (inv_read) return;
+        rx_state=START;
+        before=now;
+    } else if (rx_state==START) {
+        if (400<delta && delta<650 && inv_read) {
+            resp_idx=0; response=0; even=0;
+            rx_state=RECV;
+            before=now;
+        } //else error state but might be a new start, so just stay in this state
+    } else if (rx_state==RECV)  {
+        if (900<delta && delta<1150) {
+            if (resp_idx<32) {
+                response=(response<<1)|inv_read;
+                if (inv_read) even++;
+                resp_idx++;
+                before=now;
+            } else {
+                if (even%2==0) {
+                    xQueueSendToBackFromISR(xQueue, (void*)&response, &xHigherPriorityTaskWoken);
+                    //if( xHigherPriorityTaskWoken ) taskYIELD_FROM_ISR(); //TODO: find specific porting details
+                } else resp_idx=-1; //signal issue
+                rx_state=READY;
+            }
+        } else if (delta>=1150) { //error state
+            if (inv_read) rx_state=READY;
+            else {rx_state=START; before=now;}
+        } //else do nothing so before+=500 and next transit is a databit
+    }
 }
 
 #define NAN (0.0F/0.0F)
@@ -224,6 +259,7 @@ void device_init() {
     gpio_enable(OT_SEND_PIN, GPIO_OUTPUT); gpio_write(OT_SEND_PIN, 1);
 //     gpio_enable(LED_PIN, GPIO_OUTPUT); gpio_write(LED_PIN, 0);
     gpio_set_pullup(SENSOR_PIN, true, true);
+    xQueue = xQueueCreate(1, sizeof(uint32_t));
     xTaskCreate(temp_task, "Temp", 512, NULL, 1, NULL);
     xTaskCreate(test_task, "Test", 512, NULL, 1, NULL);
 }
