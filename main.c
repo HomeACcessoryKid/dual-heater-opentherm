@@ -102,6 +102,8 @@ void send_OT_frame(int payload) {
     bit(1);
 }
 
+uint32_t times[1000], oldtime=0;
+int      level[1000], idx=0;
 #define  READY 0
 #define  START 1
 #define  RECV  2
@@ -133,11 +135,19 @@ void test_task(void *argv) {
             printf("ANSWER: %08x\n",answer);
         }
         printf("response:%08x idx:%d\n",response,resp_idx);
+        for (int i=0;i<idx;i++) {
+            printf("%d+%4d%s", level[i], times[i]-oldtime, i%16?" | ":"\n");
+            oldtime=times[i];
+        }
+        idx=0;
         vTaskDelay(100/portTICK_PERIOD_MS);
     }
 }
 
 static void handle_rx(uint8_t interrupted_pin) {
+    times[idx]=sdk_system_get_time();
+    level[idx++]=gpio_read(OT_RECV_PIN);
+    
     BaseType_t xHigherPriorityTaskWoken=pdFALSE;
     uint32_t now=sdk_system_get_time(),delta=now-before;
     int     even=0, inv_read=gpio_read(OT_RECV_PIN);//note that gpio_read gives the inverted value of the symbol
