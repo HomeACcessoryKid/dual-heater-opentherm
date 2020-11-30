@@ -103,12 +103,12 @@ void send_OT_frame(int payload) {
 }
 
 uint32_t times[1000], oldtime=0;
-int      level[1000], idx=0;
+int      level[1000], idx=0, i;
 #define  READY 0
 #define  START 1
 #define  RECV  2
 static QueueHandle_t xQueue;
-int      resp_idx=0, rx_state=0;
+int      resp_idx=0, rx_state=READY;
 uint32_t response=0, before=0;
 void test_task(void *argv) {
     uint32_t answer;
@@ -133,24 +133,22 @@ void test_task(void *argv) {
         }
         if (xQueueReceive(xQueue, &(answer), (TickType_t)840/portTICK_PERIOD_MS) == pdTRUE) {
             printf("ANSWER: %08x\n",answer);
-        }
+        } else printf("NO ANSWER\n");
         printf("response:%08x idx:%d\n",response,resp_idx);
-        for (int i=0;i<idx;i++) {
-            printf("%d+%4d%s", level[i], times[i]-oldtime, i%16?" | ":"\n");
+        for (i=0;i<idx;i++) {
+            printf("%4d=%d%s", level[i], ((times[i]-oldtime)/10)*10, i%16?" ":"\n");
             oldtime=times[i];
         }
-        idx=0;
+        idx=0; if ((i-1)%16) printf("\n");
         vTaskDelay(100/portTICK_PERIOD_MS);
     }
 }
 
 static void handle_rx(uint8_t interrupted_pin) {
-    times[idx]=sdk_system_get_time();
-    level[idx++]=gpio_read(OT_RECV_PIN);
-    
     BaseType_t xHigherPriorityTaskWoken=pdFALSE;
     uint32_t now=sdk_system_get_time(),delta=now-before;
     int     even=0, inv_read=gpio_read(OT_RECV_PIN);//note that gpio_read gives the inverted value of the symbol
+    times[idx]=now; level[idx++]=inv_read;
     if (rx_state==READY) {
         if (inv_read) return;
         rx_state=START;
