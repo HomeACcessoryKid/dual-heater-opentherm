@@ -5,6 +5,7 @@ EXTRA_COMPONENTS = \
 	extras/rboot-ota \
     extras/onewire \
     extras/ds18b20 \
+    extras/i2s_dma \
 	$(abspath esp-wolfssl) \
 	$(abspath esp-cjson) \
 	$(abspath esp-homekit) \
