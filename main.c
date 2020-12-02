@@ -257,16 +257,18 @@ void temp_task(void *argv) {
 // }
 
 static dma_descriptor_t dma_block;
-uint8_t dma_buf[204]={0};
+uint32_t dma_buf[68]={0};
 void i2s_task(void *argv) {
     int i;
     vTaskDelay(300);
-    for (i=0;i<68;i++) memset(dma_buf+i*3,i%2?0:0xff,3);
-    for (i=0;i<204;i++) printf("%02x%s",dma_buf[i],(i+1)%16?" ":"\n");
+    for (i=0;i<68;i++) dma_buf[i]=i%2?0:0xffffffff;
+    for (i=0;i<68;i++) printf("%08x%s",dma_buf[i],(i+1)%8?" ":"\n");
     printf("\n");
     while(1) {
         i2s_dma_start(&dma_block);
         vTaskDelay(50/portTICK_PERIOD_MS);
+        i2s_dma_stop();
+        vTaskDelay(20/portTICK_PERIOD_MS);
     }
 }
 
@@ -285,17 +287,15 @@ void device_init() {
     xTaskCreate(temp_task, "Temp", 512, NULL, 1, NULL);
     xTaskCreate(test_task, "Test", 512, NULL, 1, NULL);
 
-    i2s_clock_div_t clock_div = i2s_get_clock_div(48000); //1/2 OT-bit is 24bits@ 48kHz minimum value is ~40kHz at div={63,63}
+    i2s_clock_div_t clock_div = i2s_get_clock_div(64000); //1/2 OT-bit is 32bits@ 64kHz minimum value is ~40kHz at div={63,63}
     i2s_pins_t i2s_pins = {.data = true, .clock = false, .ws = false};
     i2s_dma_init(NULL, NULL, clock_div, i2s_pins); //dma_isr_handler
-    dma_block.owner = 1;
-    dma_block.sub_sof = 0;
-    dma_block.unused = 0;
-    dma_block.buf_ptr = dma_buf;
-    dma_block.datalen = 204;
-    dma_block.blocksize = 204;
-    dma_block.eof = 1;
+    dma_block.owner = 1; dma_block.sub_sof = 0; dma_block.unused = 0;
     dma_block.next_link_ptr = 0;
+    dma_block.eof = 1;
+    dma_block.buf_ptr = dma_buf;
+    dma_block.datalen = 272;
+    dma_block.blocksize = 272;
     xTaskCreate(i2s_task,  "I2S",  512, NULL, 1, NULL);
 }
 
