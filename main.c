@@ -30,9 +30,6 @@
  #error You must set VERSION=x.y.z to match github version tag x.y.z
 #endif
 
-#ifndef OT_SEND_PIN
- #error OT_SEND_PIN is not specified
-#endif
 #ifndef OT_RECV_PIN
  #error OT_RECV_PIN is not specified
 #endif
@@ -90,17 +87,19 @@ void identify(homekit_value_t _value) {
 
 /* ============== END HOMEKIT CHARACTERISTIC DECLARATIONS ================================================================= */
 
-#define bithigh gpio_write(OT_SEND_PIN,0)
-#define bitlow  gpio_write(OT_SEND_PIN,1)
-#define bit(n)  do {if (n) {bithigh; sdk_os_delay_us(500); bitlow; sdk_os_delay_us(500);} \
-                    else   {bitlow; sdk_os_delay_us(500); bithigh; sdk_os_delay_us(500);} \
-                } while (0)
-
+#define  ZERO 0xffffffff //inverted polarity half bits
+#define  ONE  0x00000000 //inverted polarity half bits
+static   dma_descriptor_t dma_block;
+uint32_t dma_buf[68];
 void send_OT_frame(int payload) {
+    int i,j,even=0;
     printf("SENDING: %08x\n",payload);
-    bit(1);
-    for (int i=31;i>=0;i--) bit(payload&(1<<i));
-    bit(1);
+    for (i=30,j=4 ; i>=0 ; i--,j+=2) { //j=2 is the first payload 
+        if (payload&(1<<i)) dma_buf[j]=ONE,dma_buf[j+1]=ZERO,even++; else dma_buf[j]=ZERO,dma_buf[j+1]=ONE;
+    }
+    if (even%2) dma_buf[2]=ONE,dma_buf[3]=ZERO; else dma_buf[2]=ZERO,dma_buf[3]=ONE; //parity bit
+    for (i=0;i<68;i++) printf("%08x%s",dma_buf[i],(i-1)%8?" ":"\n"); printf("\n"); //debug line
+    i2s_dma_start(&dma_block); //transmit the dma_buf once
 }
 
 uint32_t times[1000], oldtime=0;
@@ -116,18 +115,18 @@ void test_task(void *argv) {
     while(1) {
         switch (tgt_heat2.value.int_value) {
             case 0:
-                bitlow;
-                break;
-            case 1:
-                bithigh;
-                break;
-            case 2:
-                //generate a command pattern status set/read
-                send_OT_frame( 0x00000300 );
-                break;
-            case 3:
                 //generate a command pattern read slave configuration flags
                 send_OT_frame( 0x00030000 );
+                break;
+            case 1:
+                send_OT_frame( 0x00000200 );
+                break;
+            case 2:
+                send_OT_frame( 0x12345678 );
+                break;
+            case 3:
+                //generate a command pattern status set/read
+                send_OT_frame( 0x00000300 );
                 break;
             default:
                 break;
@@ -256,47 +255,30 @@ void temp_task(void *argv) {
 //             homekit_characteristic_notify(&tgt_heat,HOMEKIT_UINT8(tgt_heat.value.int_value));
 // }
 
-static dma_descriptor_t dma_block;
-uint32_t dma_buf[68]={0};
-void i2s_task(void *argv) {
-    int i;
-    vTaskDelay(300);
-    for (i=0;i<68;i++) dma_buf[i]=i%2?0xffffffff:0;
-    for (i=0;i<68;i++) printf("%08x%s",dma_buf[i],(i+1)%8?" ":"\n");
-    printf("\n");
-    while(1) {
-        i2s_dma_start(&dma_block);
-        vTaskDelay(50/portTICK_PERIOD_MS);
-        i2s_dma_stop();
-        vTaskDelay(20/portTICK_PERIOD_MS);
-    }
-}
-
 void device_init() {
 //     adv_button_set_evaluate_delay(10);
 //     adv_button_create(BUTTON_PIN, true, false);
 //     adv_button_register_callback_fn(BUTTON_PIN, singlepress_callback, 1, NULL);
 //     adv_button_register_callback_fn(BUTTON_PIN, doublepress_callback, 2, NULL);
 //     adv_button_register_callback_fn(BUTTON_PIN, longpress_callback, 3, NULL);
-    gpio_enable(OT_RECV_PIN, GPIO_INPUT);
-    gpio_set_interrupt(OT_RECV_PIN, GPIO_INTTYPE_EDGE_ANY, handle_rx);
-    gpio_enable(OT_SEND_PIN, GPIO_OUTPUT); gpio_write(OT_SEND_PIN, 1);
 //     gpio_enable(LED_PIN, GPIO_OUTPUT); gpio_write(LED_PIN, 0);
     gpio_set_pullup(SENSOR_PIN, true, true);
+    gpio_enable(OT_RECV_PIN, GPIO_INPUT);
+    gpio_set_interrupt(OT_RECV_PIN, GPIO_INTTYPE_EDGE_ANY, handle_rx);
+    //OT_SEND_PIN is GPIO3 = RX0 because hardcoded in i2s
+    i2s_pins_t i2s_pins = {.data = true, .clock = false, .ws = false};
+    i2s_clock_div_t clock_div = i2s_get_clock_div(64000); //1/2 OT-bit is 32bits@ 64kHz minimum value is ~40kHz at div={63,63}
+    i2s_dma_init(NULL, NULL, clock_div, i2s_pins);
+    dma_block.owner = 1; dma_block.sub_sof = 0; dma_block.unused = 0;
+    dma_block.next_link_ptr = 0; dma_block.eof = 1; //only one block
+    dma_block.datalen = 272; dma_block.blocksize = 272; // (start + 32 bits + stop) x2 1/2bits x 4byte data
+    dma_block.buf_ptr = dma_buf; //uint32_t buffer type is 4byte data
+    dma_buf[ 0]=ONE; dma_buf[ 1]=ZERO; //start bit
+    dma_buf[66]=ONE; dma_buf[67]=ZERO; //stop  bit
+
     xQueue = xQueueCreate(1, sizeof(uint32_t));
     xTaskCreate(temp_task, "Temp", 512, NULL, 1, NULL);
     xTaskCreate(test_task, "Test", 512, NULL, 1, NULL);
-
-    i2s_clock_div_t clock_div = i2s_get_clock_div(64000); //1/2 OT-bit is 32bits@ 64kHz minimum value is ~40kHz at div={63,63}
-    i2s_pins_t i2s_pins = {.data = true, .clock = false, .ws = false};
-    i2s_dma_init(NULL, NULL, clock_div, i2s_pins); //dma_isr_handler
-    dma_block.owner = 1; dma_block.sub_sof = 0; dma_block.unused = 0;
-    dma_block.next_link_ptr = 0;
-    dma_block.eof = 1;
-    dma_block.buf_ptr = dma_buf;
-    dma_block.datalen = 272;
-    dma_block.blocksize = 272;
-    xTaskCreate(i2s_task,  "I2S",  512, NULL, 1, NULL);
 }
 
 homekit_accessory_t *accessories[] = {
