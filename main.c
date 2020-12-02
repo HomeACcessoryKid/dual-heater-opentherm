@@ -261,7 +261,7 @@ uint32_t dma_buf[68]={0};
 void i2s_task(void *argv) {
     int i;
     vTaskDelay(300);
-    for (i=0;i<68;i++) dma_buf[i]=i%2?0:0xffffffff;
+    for (i=0;i<68;i++) dma_buf[i]=i%2?0xffffffff:0;
     for (i=0;i<68;i++) printf("%08x%s",dma_buf[i],(i+1)%8?" ":"\n");
     printf("\n");
     while(1) {
