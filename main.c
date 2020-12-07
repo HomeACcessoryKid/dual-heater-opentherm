@@ -16,6 +16,7 @@
 #include <FreeRTOS.h>
 #include <task.h>
 #include <semphr.h>
+#include <timers.h>
 #include <homekit/homekit.h>
 #include <homekit/characteristics.h>
 #include <string.h>
@@ -101,77 +102,12 @@ void send_OT_frame(int payload) {
     i2s_dma_start(&dma_block); //transmit the dma_buf once
 }
 
-int      j=0;
 #define  READY 0
 #define  START 1
 #define  RECV  2
 static QueueHandle_t xQueue;
 int      resp_idx=0, rx_state=READY;
 uint32_t response=0, before=0;
-void test_task(void *argv) {
-    uint32_t answer;
-    while(1) {
-        switch (tgt_heat2.value.int_value) {
-            case 0:
-                //generate a command pattern read slave configuration flags
-                send_OT_frame( 0x00030000 );
-                break;
-            case 1:
-                send_OT_frame( 0x00000200 ); //CH disable
-                break;
-            case 2:
-                switch (j++){
-                    case 0:
-                        send_OT_frame( 0x00050000 ); //5 app specific flags
-                        break;
-                    case 1:
-                        send_OT_frame( 0x00060000 ); //6 rem param flags
-                        break;
-                    case 2:
-                        send_OT_frame( 0x00110000 ); //17 rel mod level
-                        break;
-                    case 3:
-                        send_OT_frame( 0x00120000 ); //18 CH water pressure
-                        break;
-                    case 4:
-                        send_OT_frame( 0x00190000 ); //25 boiler water temp
-                        break;
-                    case 5:
-                        send_OT_frame( 0x001a0000 ); //26 DHW temp
-                        break;
-                    case 6:
-                        send_OT_frame( 0x001c0000 ); //28 return water temp
-                        break;
-                    case 7:
-                        send_OT_frame( 0x00300000 ); //48 DHW bounds
-                        break;
-                    case 8:
-                        send_OT_frame( 0x00380000 ); //56 DHW setpoint
-                        break;
-                    case 9:
-                        send_OT_frame( 0x007d0000 ); //125 version
-                        break;
-                    default:
-                        send_OT_frame( 0x00030000 );
-                        j=0;
-                        break;
-                }
-                break;
-            case 3:
-                //generate a command pattern status set/read
-                send_OT_frame( 0x00000300 ); //CH enable
-                break;
-            default:
-                break;
-        }
-        if (xQueueReceive(xQueue, &(answer), (TickType_t)840/portTICK_PERIOD_MS) == pdTRUE) {
-            printf("ANSWER: %08x\n",answer);
-        } else printf("NO ANSWER\n");
-        printf("response:%08x idx:%d\n",response,resp_idx);
-        vTaskDelay(100/portTICK_PERIOD_MS);
-    }
-}
-
 static void handle_rx(uint8_t interrupted_pin) {
     BaseType_t xHigherPriorityTaskWoken=pdFALSE;
     uint32_t now=sdk_system_get_time(),delta=now-before;
@@ -195,9 +131,12 @@ static void handle_rx(uint8_t interrupted_pin) {
                 before=now;
             } else {
                 if (even%2==0) {
-                    xQueueSendToBackFromISR(xQueue, (void*)&response, &xHigherPriorityTaskWoken);
-                    //if( xHigherPriorityTaskWoken ) taskYIELD_FROM_ISR(); //TODO: find specific porting details
-                } else resp_idx=-1; //signal issue
+                    if (response&0x0f000000) resp_idx=-2; //signal issue reserved bits not zero
+                    else {
+                        xQueueSendToBackFromISR(xQueue, (void*)&response, &xHigherPriorityTaskWoken);
+                        //if( xHigherPriorityTaskWoken ) taskYIELD_FROM_ISR(); //TODO: find specific porting details
+                    }
+                } else resp_idx=-1; //signal issue parity failure
                 rx_state=READY;
             }
         } else if (delta>=1150) { //error state
@@ -210,10 +149,14 @@ static void handle_rx(uint8_t interrupted_pin) {
 #define NAN (0.0F/0.0F)
 #define SENSORS 4
 #define BEAT 10 //in seconds
+#define S1 0
+#define S2 1
+#define S3 2
+#define S4 3
+float temp[16]; //using id as a single hex digit, then hardcode which sensor gets which meaning
 void temp_task(void *argv) {
     ds18b20_addr_t addrs[SENSORS];
     float temps[SENSORS];
-    float temp[16]; //using id as a single hex digit, then hardcode which sensor gets which meaning
     float old_t1,old_t2,old_t3,old_t4;
     int sensor_count=0,id,j;
 
@@ -223,8 +166,8 @@ void temp_task(void *argv) {
     }
 
     while(1) {
+        ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
         ds18b20_measure_and_read_multi(SENSOR_PIN, addrs, SENSORS, temps);
-printf("after read_multi @%d\n",sdk_system_get_time()/1000);
         for (j = 0; j < SENSORS; j++) {
             // The DS18B20 address 64-bit and my batch turns out family C on https://github.com/cpetrich/counterfeit_DS18B20
             // I have manually selected that I have unique ids using the second hex digit of CRC
@@ -237,10 +180,10 @@ printf("after read_multi @%d\n",sdk_system_get_time()/1000);
         old_t2=cur_temp2.value.float_value;
         old_t3=cur_temp3.value.float_value;
         old_t4=cur_temp4.value.float_value;
-        cur_temp1.value.float_value=isnan(temp[0])?100.0F:(float)(int)(temp[0]*2+0.5)/2; //TODO: isnan implicit declaration error in compiler?
-        cur_temp2.value.float_value=isnan(temp[1])?100.0F:(float)(int)(temp[1]*2+0.5)/2;
-        cur_temp3.value.float_value=isnan(temp[2])?100.0F:(float)(int)(temp[2]*2+0.5)/2;
-        cur_temp4.value.float_value=isnan(temp[3])?100.0F:(float)(int)(temp[3]*2+0.5)/2;
+        cur_temp1.value.float_value=isnan(temp[S1])?100.0F:(float)(int)(temp[S1]*2+0.5)/2; //TODO: isnan implicit declaration error in compiler?
+        cur_temp2.value.float_value=isnan(temp[S2])?100.0F:(float)(int)(temp[S2]*2+0.5)/2;
+        cur_temp3.value.float_value=isnan(temp[S3])?100.0F:(float)(int)(temp[S3]*2+0.5)/2;
+        cur_temp4.value.float_value=isnan(temp[S4])?100.0F:(float)(int)(temp[S4]*2+0.5)/2;
         printf("temp1=%1.1f  temp2=%1.1f  temp3=%1.1f  temp4=%1.1f", \
             cur_temp1.value.float_value,cur_temp2.value.float_value,cur_temp3.value.float_value,cur_temp4.value.float_value);
         if (old_t1!=cur_temp1.value.float_value) {
@@ -260,10 +203,70 @@ printf("after read_multi @%d\n",sdk_system_get_time()/1000);
             homekit_characteristic_notify(&cur_temp4,HOMEKIT_FLOAT(cur_temp4.value.float_value));
         }
         printf("\n");
-        // ds18b20_measure_and_read_multi operation already takes at least 750ms to run
-        vTaskDelay((BEAT*1000 - 800) / portTICK_PERIOD_MS);
+        // ds18b20_measure_and_read_multi operation takes about 800ms to run, 3ms start, 750ms wait, 11ms/sensor to read
     }
 }
+static TaskHandle_t tempTask = NULL;
+int timeIndex=0;
+TimerHandle_t xTimer;
+void vTimerCallback( TimerHandle_t xTimer ) {
+    printf("Timer%d @ %d\n",timeIndex,sdk_system_get_time()/1000);
+    uint32_t answer;
+    //timeIndex = ( int ) pvTimerGetTimerID( xTimer ); use instead of a global timeIndex
+    switch (timeIndex) { //send commands
+        case 0: //measure temperature
+            xTaskNotifyGive( tempTask ); //temperature measurement start
+            vTaskDelay(1); //prevent interference between OneWire and OT-receiver
+            send_OT_frame(0x00190000); //25 read boiler water temperature
+            break;
+        case 1: //calculate heater decisions
+            //blabla
+            send_OT_frame(0x00030000); //read slave configuration flags
+            break;
+        case 2:
+            send_OT_frame( 0x00110000 ); //17 rel mod level
+            break;
+        case 3:
+            send_OT_frame( 0x00120000 ); //18 CH water pressure
+            break;
+        case 4:
+            send_OT_frame( 0x00190000 ); //25 boiler water temp
+            break;
+        case 5:
+            send_OT_frame( 0x001a0000 ); //26 DHW temp
+            break;
+        case 6:
+            send_OT_frame( 0x001c0000 ); //28 return water temp
+            break;
+        case 7:
+            send_OT_frame( 0x00300000 ); //48 DHW bounds
+            break;
+        case 8:
+            send_OT_frame( 0x00380000 ); //56 DHW setpoint
+            break;
+        case 9:
+            send_OT_frame( 0x00050000 ); //5 app specific flags
+            break;
+        default:
+            break;
+    }
+    
+    if (xQueueReceive(xQueue, &(answer), (TickType_t)850/portTICK_PERIOD_MS) == pdTRUE) {
+        printf("ANSWER: %08x\n",answer);
+        switch (timeIndex) { //check answers
+            case 0:
+                printf("boiler temp: %2.4f\n",(float)(answer&0x0000ffff)/256);//check answer;
+                break;
+            case 1:
+                //check answer;
+                break;
+            default:
+                break;
+        }
+    } else printf("!!! NO ANSWER: %d\n",resp_idx);
+    
+    timeIndex++; if (timeIndex==BEAT) timeIndex=0;
+} //this is a timer that restarts every 1 second
 
 // void singlepress_callback(uint8_t gpio, void *args) {
 //             UDPLUS("single press = stop here\n");
@@ -305,8 +308,9 @@ void device_init() {
     dma_buf[66]=ONE; dma_buf[67]=ZERO; //stop  bit
 
     xQueue = xQueueCreate(1, sizeof(uint32_t));
-    xTaskCreate(temp_task, "Temp", 512, NULL, 1, NULL);
-    xTaskCreate(test_task, "Test", 512, NULL, 1, NULL);
+    xTaskCreate(temp_task,"Temp", 512, NULL, 1, &tempTask);
+    xTimer=xTimerCreate( "Timer", 1000/portTICK_PERIOD_MS, pdTRUE, (void*)0, vTimerCallback);
+    xTimerStart(xTimer, 0);
 }
 
 homekit_accessory_t *accessories[] = {
