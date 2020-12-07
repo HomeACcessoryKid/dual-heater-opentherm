@@ -98,12 +98,10 @@ void send_OT_frame(int payload) {
         if (payload&(1<<i)) dma_buf[j]=ONE,dma_buf[j+1]=ZERO,even++; else dma_buf[j]=ZERO,dma_buf[j+1]=ONE;
     }
     if (even%2) dma_buf[2]=ONE,dma_buf[3]=ZERO; else dma_buf[2]=ZERO,dma_buf[3]=ONE; //parity bit
-    for (i=0;i<68;i++) printf("%08x%s",dma_buf[i],(i-1)%8?" ":"\n"); printf("\n"); //debug line
     i2s_dma_start(&dma_block); //transmit the dma_buf once
 }
 
-uint32_t times[1000], oldtime=0;
-int      level[1000], idx=0, i;
+int      j=0;
 #define  READY 0
 #define  START 1
 #define  RECV  2
@@ -119,14 +117,49 @@ void test_task(void *argv) {
                 send_OT_frame( 0x00030000 );
                 break;
             case 1:
-                send_OT_frame( 0x00000200 );
+                send_OT_frame( 0x00000200 ); //CH disable
                 break;
             case 2:
-                send_OT_frame( 0x12345678 );
+                switch (j++){
+                    case 0:
+                        send_OT_frame( 0x00050000 ); //5 app specific flags
+                        break;
+                    case 1:
+                        send_OT_frame( 0x00060000 ); //6 rem param flags
+                        break;
+                    case 2:
+                        send_OT_frame( 0x00110000 ); //17 rel mod level
+                        break;
+                    case 3:
+                        send_OT_frame( 0x00120000 ); //18 CH water pressure
+                        break;
+                    case 4:
+                        send_OT_frame( 0x00190000 ); //25 boiler water temp
+                        break;
+                    case 5:
+                        send_OT_frame( 0x001a0000 ); //26 DHW temp
+                        break;
+                    case 6:
+                        send_OT_frame( 0x001c0000 ); //28 return water temp
+                        break;
+                    case 7:
+                        send_OT_frame( 0x00300000 ); //48 DHW bounds
+                        break;
+                    case 8:
+                        send_OT_frame( 0x00380000 ); //56 DHW setpoint
+                        break;
+                    case 9:
+                        send_OT_frame( 0x007d0000 ); //125 version
+                        break;
+                    default:
+                        send_OT_frame( 0x00030000 );
+                        j=0;
+                        break;
+                }
                 break;
             case 3:
                 //generate a command pattern status set/read
-                send_OT_frame( 0x00000300 );
+                send_OT_frame( 0x00000300 ); //CH enable
                 break;
             default:
                 break;
@@ -135,11 +168,6 @@ void test_task(void *argv) {
             printf("ANSWER: %08x\n",answer);
         } else printf("NO ANSWER\n");
         printf("response:%08x idx:%d\n",response,resp_idx);
-        for (i=0;i<idx;i++) {
-            printf("%4d=%d%s", level[i], ((times[i]-oldtime)/10)*10, i%16?" ":"\n");
-            oldtime=times[i];
-        }
-        idx=0; if (!i && (i-1)%16) printf("\n");
         vTaskDelay(100/portTICK_PERIOD_MS);
     }
 }
@@ -148,7 +176,6 @@ static void handle_rx(uint8_t interrupted_pin) {
     BaseType_t xHigherPriorityTaskWoken=pdFALSE;
     uint32_t now=sdk_system_get_time(),delta=now-before;
     int     even=0, inv_read=gpio_read(OT_RECV_PIN);//note that gpio_read gives the inverted value of the symbol
-    times[idx]=now; level[idx++]=inv_read;
     if (rx_state==READY) {
         if (inv_read) return;
         rx_state=START;
@@ -197,6 +224,7 @@ void temp_task(void *argv) {
 
     while(1) {
         ds18b20_measure_and_read_multi(SENSOR_PIN, addrs, SENSORS, temps);
+printf("after read_multi @%d\n",sdk_system_get_time()/1000);
         for (j = 0; j < SENSORS; j++) {
             // The DS18B20 address 64-bit and my batch turns out family C on https://github.com/cpetrich/counterfeit_DS18B20
             // I have manually selected that I have unique ids using the second hex digit of CRC
