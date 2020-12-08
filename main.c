@@ -37,6 +37,9 @@
 #ifndef SENSOR_PIN
  #error SENSOR_PIN is not specified
 #endif
+#ifndef SWITCH_PIN
+ #error SWITCH_PIN is not specified
+#endif
 #ifndef LED_PIN
  #error LED_PIN is not specified
 #endif
@@ -94,7 +97,7 @@ static   dma_descriptor_t dma_block;
 uint32_t dma_buf[68];
 void send_OT_frame(int payload) {
     int i,j,even=0;
-    printf("SENDING: %08x\n",payload);
+    printf("SEND: %08x\n",payload);
     for (i=30,j=4 ; i>=0 ; i--,j+=2) { //j=2 is the first payload 
         if (payload&(1<<i)) dma_buf[j]=ONE,dma_buf[j+1]=ZERO,even++; else dma_buf[j]=ZERO,dma_buf[j+1]=ONE;
     }
@@ -133,6 +136,7 @@ static void handle_rx(uint8_t interrupted_pin) {
                 if (even%2==0) {
                     if (response&0x0f000000) resp_idx=-2; //signal issue reserved bits not zero
                     else {
+                        response&=0x7fffffff; //mask parity bit
                         xQueueSendToBackFromISR(xQueue, (void*)&response, &xHigherPriorityTaskWoken);
                         //if( xHigherPriorityTaskWoken ) taskYIELD_FROM_ISR(); //TODO: find specific porting details
                     }
@@ -210,9 +214,16 @@ static TaskHandle_t tempTask = NULL;
 int timeIndex=0;
 TimerHandle_t xTimer;
 void vTimerCallback( TimerHandle_t xTimer ) {
-    printf("Timer%d @ %d\n",timeIndex,sdk_system_get_time()/1000);
-    uint32_t answer;
+    uint32_t counter = ( uint32_t ) pvTimerGetTimerID( xTimer );
+    vTimerSetTimerID( xTimer, (void*)counter+1);
     //timeIndex = ( int ) pvTimerGetTimerID( xTimer ); use instead of a global timeIndex
+    uint32_t message;
+    int switch_state=0,switch_on=0;
+    if (gpio_read(SWITCH_PIN)) switch_state--; else switch_state++; //pin is low when switch is on
+    if (switch_state<0) switch_state=0;
+    if (switch_state>3) switch_state=3;
+    switch_on=switch_state>>1;
+    printf("Switch %d Timer%d - %d @ %d\n",switch_on,timeIndex,counter,sdk_system_get_time()/1000);
     switch (timeIndex) { //send commands
         case 0: //measure temperature
             xTaskNotifyGive( tempTask ); //temperature measurement start
@@ -221,79 +232,45 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             break;
         case 1: //calculate heater decisions
             //blabla
-            send_OT_frame(0x00030000); //read slave configuration flags
+            message=0x10010000|(int)(((tgt_temp2.value.float_value-10)*4)*256);
+            send_OT_frame(message); //1  CH setpoint
             break;
-        case 2:
-            send_OT_frame( 0x00110000 ); //17 rel mod level
+        case 2: //calculate heater decisions
+            //blabla
+            message=0x100e0000|(int)(((tgt_temp1.value.float_value-10)*4)*256);
+            send_OT_frame(message); //14  modulation level
             break;
         case 3:
-            send_OT_frame( 0x00120000 ); //18 CH water pressure
-            break;
-        case 4:
-            send_OT_frame( 0x00190000 ); //25 boiler water temp
-            break;
-        case 5:
-            send_OT_frame( 0x001a0000 ); //26 DHW temp
-            break;
-        case 6:
-            send_OT_frame( 0x001c0000 ); //28 return water temp
-            break;
-        case 7:
-            send_OT_frame( 0x00300000 ); //48 DHW bounds
-            break;
-        case 8:
-            send_OT_frame( 0x00380000 ); //56 DHW setpoint
-            break;
-        case 9:
-            send_OT_frame( 0x00050000 ); //5 app specific flags
-            break;
-        default:
-            break;
+            message=0x00000200|(tgt_heat2.value.int_value?0x000:0x100);
+            send_OT_frame( message ); //0  enable CH and DHW
+            break; 
+        case 4: send_OT_frame( 0x00380000 ); break; //56 DHW setpoint write
+        case 5: send_OT_frame( 0x00050000 ); break; //5  app specific fault flags
+        case 6: send_OT_frame( 0x00120000 ); break; //18 CH water pressure
+        case 7: send_OT_frame( 0x001a0000 ); break; //26 DHW temp
+        case 8: send_OT_frame( 0x001c0000 ); break; //28 return water temp
+        case 9: send_OT_frame( 0x00110000 ); break; //17 rel mod level
+        default: break;
     }
     
-    if (xQueueReceive(xQueue, &(answer), (TickType_t)850/portTICK_PERIOD_MS) == pdTRUE) {
-        printf("ANSWER: %08x\n",answer);
+    if (xQueueReceive(xQueue, &(message), (TickType_t)850/portTICK_PERIOD_MS) == pdTRUE) {
+        printf("RESP: %08x\n",message);
         switch (timeIndex) { //check answers
             case 0:
-                printf("boiler temp: %2.4f\n",(float)(answer&0x0000ffff)/256);//check answer;
-                break;
-            case 1:
-                //check answer;
+                printf("  Boiler 0 reports %2.1f deg C\n",(float)(message&0x0000ffff)/256);//check answer;
                 break;
             default:
                 break;
         }
-    } else printf("!!! NO ANSWER: %d\n",resp_idx);
+    } else printf("!!! NO RESP: %d\n",resp_idx);
     
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
 } //this is a timer that restarts every 1 second
 
-// void singlepress_callback(uint8_t gpio, void *args) {
-//             UDPLUS("single press = stop here\n");
-//             tgt_heat.value.int_value=cur_heat.value.int_value;
-//             homekit_characteristic_notify(&tgt_heat,HOMEKIT_UINT8(tgt_heat.value.int_value));
-// }
-// 
-// void doublepress_callback(uint8_t gpio, void *args) {
-//             UDPLUS("double press = go open\n");
-//             tgt_heat.value.int_value=100;
-//             homekit_characteristic_notify(&tgt_heat,HOMEKIT_UINT8(tgt_heat.value.int_value));
-// }
-// 
-// void longpress_callback(uint8_t gpio, void *args) {
-//             UDPLUS("long press = go close\n");
-//             tgt_heat.value.int_value=0;
-//             homekit_characteristic_notify(&tgt_heat,HOMEKIT_UINT8(tgt_heat.value.int_value));
-// }
-
 void device_init() {
-//     adv_button_set_evaluate_delay(10);
-//     adv_button_create(BUTTON_PIN, true, false);
-//     adv_button_register_callback_fn(BUTTON_PIN, singlepress_callback, 1, NULL);
-//     adv_button_register_callback_fn(BUTTON_PIN, doublepress_callback, 2, NULL);
-//     adv_button_register_callback_fn(BUTTON_PIN, longpress_callback, 3, NULL);
 //     gpio_enable(LED_PIN, GPIO_OUTPUT); gpio_write(LED_PIN, 0);
     gpio_set_pullup(SENSOR_PIN, true, true);
+    gpio_enable(SWITCH_PIN, GPIO_INPUT);
     gpio_enable(OT_RECV_PIN, GPIO_INPUT);
     gpio_set_interrupt(OT_RECV_PIN, GPIO_INTTYPE_EDGE_ANY, handle_rx);
     //OT_SEND_PIN is GPIO3 = RX0 because hardcoded in i2s
