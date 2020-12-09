@@ -211,14 +211,14 @@ void temp_task(void *argv) {
     }
 }
 static TaskHandle_t tempTask = NULL;
-int timeIndex=0;
+int timeIndex=0,switch_state=0;
 TimerHandle_t xTimer;
 void vTimerCallback( TimerHandle_t xTimer ) {
     uint32_t counter = ( uint32_t ) pvTimerGetTimerID( xTimer );
     vTimerSetTimerID( xTimer, (void*)counter+1);
     //timeIndex = ( int ) pvTimerGetTimerID( xTimer ); use instead of a global timeIndex
     uint32_t message;
-    int switch_state=0,switch_on=0;
+    int switch_on=0;
     if (gpio_read(SWITCH_PIN)) switch_state--; else switch_state++; //pin is low when switch is on
     if (switch_state<0) switch_state=0;
     if (switch_state>3) switch_state=3;
@@ -232,16 +232,21 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             break;
         case 1: //calculate heater decisions
             //blabla
-            message=0x10010000|(int)(((tgt_temp2.value.float_value-10)*4)*256);
-            send_OT_frame(message); //1  CH setpoint
+            if (tgt_heat1.value.int_value==3) {
+                   message=0x10014000; //64 deg
+            } else message=0x10010000|(uint32_t)(tgt_temp2.value.float_value*2-1)*256; //range from 19 - 75 deg
+            send_OT_frame(message); //1  CH setpoint in deg C
             break;
-        case 2: //calculate heater decisions
-            //blabla
-            message=0x100e0000|(int)(((tgt_temp1.value.float_value-10)*4)*256);
-            send_OT_frame(message); //14  modulation level
+        case 2:
+            if (tgt_heat1.value.int_value==3) {
+                   message=0x100e6400; //100%
+            } else message=0x100e0000|(uint32_t)(((tgt_temp1.value.float_value-10)*(100.0/28.0))*256);
+            send_OT_frame(message); //14 max modulation level
             break;
         case 3:
-            message=0x00000200|(tgt_heat2.value.int_value?0x000:0x100);
+            if (tgt_heat1.value.int_value==3) {
+                   message=0x00000200|(switch_on?0x100:0x000);
+            } else message=0x00000000|(tgt_heat2.value.int_value<<8);
             send_OT_frame( message ); //0  enable CH and DHW
             break; 
         case 4: send_OT_frame( 0x00380000 ); break; //56 DHW setpoint write
