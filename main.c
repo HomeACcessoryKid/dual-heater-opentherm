@@ -105,6 +105,8 @@ void send_OT_frame(int payload) {
     i2s_dma_start(&dma_block); //transmit the dma_buf once
 }
 
+uint32_t times[1000], oldtime=0;
+int      level[1000], idx=0, i;
 #define  READY 0
 #define  START 1
 #define  RECV  2
@@ -115,6 +117,7 @@ static void handle_rx(uint8_t interrupted_pin) {
     BaseType_t xHigherPriorityTaskWoken=pdFALSE;
     uint32_t now=sdk_system_get_time(),delta=now-before;
     int     even=0, inv_read=gpio_read(OT_RECV_PIN);//note that gpio_read gives the inverted value of the symbol
+    times[idx]=now; level[idx++]=inv_read;
     if (rx_state==READY) {
         if (inv_read) return;
         rx_state=START;
@@ -267,7 +270,17 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             default:
                 break;
         }
-    } else printf("!!! NO RESP: %d\n",resp_idx);
+    } else {printf("!!! NO RESP: %d\n",resp_idx);
+        for (i=0;i<idx;i++) {
+            printf("%4d=%d%s", ((times[i]-oldtime)/10)*10, level[i], i%16?" ":"\n");
+            oldtime=times[i];
+        }
+        idx=0; printf("\n");
+    }
+    if (idx>500) {
+        for (i=0;i<750;i++) times[i]=times[i+250];
+        idx-=250;
+    }
     
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
 } //this is a timer that restarts every 1 second
