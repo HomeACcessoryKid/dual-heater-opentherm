@@ -270,7 +270,9 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             default:
                 break;
         }
-    } else {printf("!!! NO RESP: %d\n",resp_idx);
+    } else {
+        printf("!!! NO RESP: %d\n",resp_idx);
+        resp_idx=0, rx_state=READY, response=0;
         for (i=0;i<idx;i++) {
             printf("%4d=%d%s", ((times[i]-oldtime)/10)*10, level[i], i%16?" ":"\n");
             oldtime=times[i];
