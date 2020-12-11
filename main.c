@@ -61,15 +61,15 @@ homekit_characteristic_t revision     = HOMEKIT_CHARACTERISTIC_(FIRMWARE_REVISIO
 //    config.accessories[0]->config_number=c_hash;
 // end of OTA add-in instructions
 
-homekit_characteristic_t tgt_heat1 = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE,  1 );
-homekit_characteristic_t cur_heat1 = HOMEKIT_CHARACTERISTIC_(CURRENT_HEATING_COOLING_STATE, 1 );
-homekit_characteristic_t tgt_temp1 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         21.0 );
+homekit_characteristic_t tgt_heat1 = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE,  3 );
+homekit_characteristic_t cur_heat1 = HOMEKIT_CHARACTERISTIC_(CURRENT_HEATING_COOLING_STATE, 0 );
+homekit_characteristic_t tgt_temp1 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         19.5 );
 homekit_characteristic_t cur_temp1 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         1.0 );
 homekit_characteristic_t dis_temp1 = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY_UNITS,     0 );
 
-homekit_characteristic_t tgt_heat2 = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE,  0 );
+homekit_characteristic_t tgt_heat2 = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE,  1 );
 homekit_characteristic_t cur_heat2 = HOMEKIT_CHARACTERISTIC_(CURRENT_HEATING_COOLING_STATE, 0 );
-homekit_characteristic_t tgt_temp2 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         18.0 );
+homekit_characteristic_t tgt_temp2 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         38.0 );
 homekit_characteristic_t cur_temp2 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         2.0 );
 homekit_characteristic_t dis_temp2 = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY_UNITS,     0 );
 
@@ -93,7 +93,7 @@ static   dma_descriptor_t dma_block;
 uint32_t dma_buf[68];
 void send_OT_frame(int payload) {
     int i,j,even=0;
-    printf("SEND: %08x ",payload);
+    printf("SND:%08x ",payload);
     for (i=30,j=4 ; i>=0 ; i--,j+=2) { //j=2 is the first payload 
         if (payload&(1<<i)) dma_buf[j]=ONE,dma_buf[j+1]=ZERO,even++; else dma_buf[j]=ZERO,dma_buf[j+1]=ONE;
     }
@@ -216,7 +216,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     if (switch_state>3) switch_state=3;
     switch_on=switch_state>>1;
     //TODO read recv pin and if it is a ONE, we have an OpenTherm error state
-    printf("State %d Switch%d @ %d ",timeIndex,switch_on,counter);
+    printf("St%d Sw%d @%d ",timeIndex,switch_on,counter);
     switch (timeIndex) { //send commands
         case 0: //measure temperature
             xTaskNotifyGive( tempTask ); //temperature measurement start
@@ -225,21 +225,21 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             break;
         case 1: //calculate heater decisions
             //blabla
-            if (tgt_heat1.value.int_value==3) {
+            if (tgt_heat2.value.int_value==3) {
                    message=0x10014000; //64 deg
-            } else message=0x10010000|(uint32_t)(tgt_temp2.value.float_value*2-1)*256; //range from 19 - 75 deg
+            } else message=0x10010000|(uint32_t)(tgt_temp1.value.float_value*2-1)*256; //range from 19 - 75 deg
             send_OT_frame(message); //1  CH setpoint in deg C
             break;
         case 2:
-            if (tgt_heat1.value.int_value==3) {
+            if (tgt_heat2.value.int_value==3) {
                    message=0x100e6400; //100%
-            } else message=0x100e0000|(uint32_t)(((tgt_temp1.value.float_value-10)*(100.0/28.0))*256);
+            } else message=0x100e0000|(uint32_t)(((tgt_temp2.value.float_value-10)*(100.0/28.0))*256);
             send_OT_frame(message); //14 max modulation level
             break;
         case 3:
-            if (tgt_heat1.value.int_value==3) {
+            if (tgt_heat2.value.int_value==3) {
                    message=0x00000200|(switch_on?0x100:0x000);
-            } else message=0x00000000|(tgt_heat2.value.int_value<<8);
+            } else message=0x00000000|(tgt_heat1.value.int_value<<8);
             send_OT_frame( message ); //0  enable CH and DHW
             break; 
         case 4: send_OT_frame( 0x00380000 ); break; //56 DHW setpoint write
@@ -252,10 +252,13 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     }
     
     if (xQueueReceive(xQueue, &(message), (TickType_t)850/portTICK_PERIOD_MS) == pdTRUE) {
-        printf("RESP: %08x\n",message);
+        printf("RSP:%08x\n",message);
         switch (timeIndex) { //check answers
             case 0: temp[BW]=(float)(message&0x0000ffff)/256; break;
-            case 3: stateflg=       (message&0x0000007f)    ; break;
+            case 3:
+                stateflg=(message&0x0000007f);
+                cur_heat1.value.int_value=stateflg&0x8?1:0;
+                break;
             case 5: errorflg=       (message&0x00003f00)/256; break;
             case 6: pressure=(float)(message&0x0000ffff)/256; break;
             case 7: temp[DW]=(float)(message&0x0000ffff)/256; break;
@@ -264,7 +267,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             default: break;
         }
     } else {
-        printf("!!! NO RESP: resp_idx=%d rx_state=%d response=%08x\n",resp_idx, rx_state, response);
+        printf("!!! NO_RSP: resp_idx=%d rx_state=%d response=%08x\n",resp_idx, rx_state, response);
         resp_idx=0, rx_state=READY, response=0;
 #ifdef DEBUG_RECV
         for (int i=0;i<idx;i++) {
@@ -278,8 +281,9 @@ void vTimerCallback( TimerHandle_t xTimer ) {
         idx-=250;
 #endif
     }
-    if (!timeIndex) printf("S1=%2.4f S2=%2.4f BW=%2.4f S3=%2.4f S4=%2.4f RW=%2.4f DW=%2.4f PR=%1.2f ERR=%02x MOD=%2.0f ST=%02x\n", \
-                       temp[S1],temp[S2],temp[BW],temp[S3],temp[S4],temp[RW],temp[DW],pressure,errorflg,curr_mod,stateflg);
+    
+    if (!timeIndex) printf("PR=%1.2f ERR=%02x DW=%2.4f S2=%2.4f S3=%2.4f S4=%2.4f BW=%2.4f RW=%2.4f S1=%2.4f MOD=%2.0f ST=%02x\n", \
+                       pressure,errorflg,temp[DW],temp[S2],temp[S3],temp[S4],temp[BW],temp[RW],temp[S1],curr_mod,stateflg);
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
 } //this is a timer that restarts every 1 second
 
