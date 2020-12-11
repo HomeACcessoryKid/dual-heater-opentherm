@@ -258,6 +258,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             case 3:
                 stateflg=(message&0x0000007f);
                 cur_heat1.value.int_value=stateflg&0x8?1:0;
+                homekit_characteristic_notify(&cur_heat1,HOMEKIT_UINT8(cur_heat1.value.int_value));
                 break;
             case 5: errorflg=       (message&0x00003f00)/256; break;
             case 6: pressure=(float)(message&0x0000ffff)/256; break;
@@ -282,8 +283,8 @@ void vTimerCallback( TimerHandle_t xTimer ) {
 #endif
     }
     
-    if (!timeIndex) printf("PR=%1.2f ERR=%02x DW=%2.4f S2=%2.4f S3=%2.4f S4=%2.4f BW=%2.4f RW=%2.4f S1=%2.4f MOD=%2.0f ST=%02x\n", \
-                       pressure,errorflg,temp[DW],temp[S2],temp[S3],temp[S4],temp[BW],temp[RW],temp[S1],curr_mod,stateflg);
+    if (!timeIndex) printf("PR=%1.2f DW=%2.4f S2=%2.4f S3=%2.4f S4=%2.4f ERR=%02x RW=%2.4f BW=%2.4f S1=%2.4f MOD=%2.0f ST=%02x\n", \
+                       pressure,temp[DW],temp[S2],temp[S3],temp[S4],errorflg,temp[RW],temp[BW],temp[S1],curr_mod,stateflg);
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
 } //this is a timer that restarts every 1 second
 
