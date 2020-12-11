@@ -21,9 +21,7 @@
 #include <homekit/characteristics.h>
 #include <string.h>
 #include "lwip/api.h"
-// #include <wifi_config.h>
 #include <udplogger.h>
-//#include <adv_button.h>
 #include "ds18b20/ds18b20.h"
 #include "i2s_dma/i2s_dma.h"
 
@@ -43,8 +41,6 @@
 #ifndef LED_PIN
  #error LED_PIN is not specified
 #endif
-
-int inhibit=0; //seconds pump will be inhibited
 
 /* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS =============================================================== */
 // add this section to make your device OTA capable
@@ -97,7 +93,7 @@ static   dma_descriptor_t dma_block;
 uint32_t dma_buf[68];
 void send_OT_frame(int payload) {
     int i,j,even=0;
-    printf("SEND: %08x\n",payload);
+    printf("SEND: %08x ",payload);
     for (i=30,j=4 ; i>=0 ; i--,j+=2) { //j=2 is the first payload 
         if (payload&(1<<i)) dma_buf[j]=ONE,dma_buf[j+1]=ZERO,even++; else dma_buf[j]=ZERO,dma_buf[j+1]=ONE;
     }
@@ -105,8 +101,10 @@ void send_OT_frame(int payload) {
     i2s_dma_start(&dma_block); //transmit the dma_buf once
 }
 
-uint32_t times[1000], oldtime=0;
-int      level[1000], idx=0, i;
+#ifdef DEBUG_RECV
+ uint32_t times[1000], oldtime=0;
+ int      level[1000], idx=0;
+#endif
 #define  READY 0
 #define  START 1
 #define  RECV  2
@@ -117,7 +115,9 @@ static void handle_rx(uint8_t interrupted_pin) {
     BaseType_t xHigherPriorityTaskWoken=pdFALSE;
     uint32_t now=sdk_system_get_time(),delta=now-before;
     int     even=0, inv_read=gpio_read(OT_RECV_PIN);//note that gpio_read gives the inverted value of the symbol
+#ifdef DEBUG_RECV
     times[idx]=now; level[idx++]=inv_read;
+#endif
     if (rx_state==READY) {
         if (inv_read) return;
         rx_state=START;
@@ -153,13 +153,17 @@ static void handle_rx(uint8_t interrupted_pin) {
     }
 }
 
+#define BEAT 10 //in seconds
 #define NAN (0.0F/0.0F)
 #define SENSORS 4
-#define BEAT 10 //in seconds
-#define S1 0
-#define S2 1
-#define S3 2
-#define S4 3
+#define S1 0 //salon temp sensor
+#define S2 1 //upstairs temp sensor
+#define S5 6 //outside temp sensor
+#define S3 2 //outgoing water temp sensor
+#define S4 3 //incoming water temp sensor
+#define BW 4 //boiler water temp
+#define RW 5 //return water temp
+#define DW 8 //domestic home water temp
 float temp[16]; //using id as a single hex digit, then hardcode which sensor gets which meaning
 void temp_task(void *argv) {
     ds18b20_addr_t addrs[SENSORS];
@@ -168,8 +172,8 @@ void temp_task(void *argv) {
     int sensor_count=0,id,j;
 
     while( (sensor_count=ds18b20_scan_devices(SENSOR_PIN, addrs, SENSORS)) != SENSORS) {
-        vTaskDelay(BEAT*1000/portTICK_PERIOD_MS);
         UDPLUS("Only found %d sensors\n",sensor_count);
+        vTaskDelay(BEAT*1000/portTICK_PERIOD_MS);
     }
 
     while(1) {
@@ -180,53 +184,39 @@ void temp_task(void *argv) {
             // I have manually selected that I have unique ids using the second hex digit of CRC
             id = (addrs[j]>>56)&0xF;
             temp[id] = temps[j];
-            printf("  Sensor %x reports %2.4f deg C\n", id, temps[j] );
         }
-
         old_t1=cur_temp1.value.float_value; //TODO: do we need to test for changed values or is that embedded in notify routine?
-        old_t2=cur_temp2.value.float_value;
+        old_t2=cur_temp2.value.float_value; //TODO: convert this in a macro
         old_t3=cur_temp3.value.float_value;
         old_t4=cur_temp4.value.float_value;
         cur_temp1.value.float_value=isnan(temp[S1])?100.0F:(float)(int)(temp[S1]*2+0.5)/2; //TODO: isnan implicit declaration error in compiler?
         cur_temp2.value.float_value=isnan(temp[S2])?100.0F:(float)(int)(temp[S2]*2+0.5)/2;
         cur_temp3.value.float_value=isnan(temp[S3])?100.0F:(float)(int)(temp[S3]*2+0.5)/2;
         cur_temp4.value.float_value=isnan(temp[S4])?100.0F:(float)(int)(temp[S4]*2+0.5)/2;
-        printf("temp1=%1.1f  temp2=%1.1f  temp3=%1.1f  temp4=%1.1f", \
-            cur_temp1.value.float_value,cur_temp2.value.float_value,cur_temp3.value.float_value,cur_temp4.value.float_value);
-        if (old_t1!=cur_temp1.value.float_value) {
-            printf("  notify1");
-            homekit_characteristic_notify(&cur_temp1,HOMEKIT_FLOAT(cur_temp1.value.float_value));
-        }
-        if (old_t2!=cur_temp2.value.float_value) {
-            printf("  notify2");
-            homekit_characteristic_notify(&cur_temp2,HOMEKIT_FLOAT(cur_temp2.value.float_value));
-        }
-        if (old_t3!=cur_temp3.value.float_value) {
-            printf("  notify3");
-            homekit_characteristic_notify(&cur_temp3,HOMEKIT_FLOAT(cur_temp3.value.float_value));
-        }
-        if (old_t4!=cur_temp4.value.float_value) {
-            printf("  notify4");
-            homekit_characteristic_notify(&cur_temp4,HOMEKIT_FLOAT(cur_temp4.value.float_value));
-        }
-        printf("\n");
+        if (old_t1!=cur_temp1.value.float_value) homekit_characteristic_notify(&cur_temp1,HOMEKIT_FLOAT(cur_temp1.value.float_value));
+        if (old_t2!=cur_temp2.value.float_value) homekit_characteristic_notify(&cur_temp2,HOMEKIT_FLOAT(cur_temp2.value.float_value));
+        if (old_t3!=cur_temp3.value.float_value) homekit_characteristic_notify(&cur_temp3,HOMEKIT_FLOAT(cur_temp3.value.float_value));
+        if (old_t4!=cur_temp4.value.float_value) homekit_characteristic_notify(&cur_temp4,HOMEKIT_FLOAT(cur_temp4.value.float_value));
         // ds18b20_measure_and_read_multi operation takes about 800ms to run, 3ms start, 750ms wait, 11ms/sensor to read
     }
 }
+
+float curr_mod=0,pressure=0;
+int   stateflg=0,errorflg=0;
 static TaskHandle_t tempTask = NULL;
 int timeIndex=0,switch_state=0;
 TimerHandle_t xTimer;
 void vTimerCallback( TimerHandle_t xTimer ) {
     uint32_t counter = ( uint32_t ) pvTimerGetTimerID( xTimer );
-    vTimerSetTimerID( xTimer, (void*)counter+1);
-    //timeIndex = ( int ) pvTimerGetTimerID( xTimer ); use instead of a global timeIndex
+    vTimerSetTimerID( xTimer, (void*)counter+1); //136 year to loop
     uint32_t message;
     int switch_on=0;
     if (gpio_read(SWITCH_PIN)) switch_state--; else switch_state++; //pin is low when switch is on
     if (switch_state<0) switch_state=0;
     if (switch_state>3) switch_state=3;
     switch_on=switch_state>>1;
-    printf("Switch %d Timer%d - %d @ %d\n",switch_on,timeIndex,counter,sdk_system_get_time()/1000);
+    //TODO read recv pin and if it is a ONE, we have an OpenTherm error state
+    printf("State %d Switch%d @ %d ",timeIndex,switch_on,counter);
     switch (timeIndex) { //send commands
         case 0: //measure temperature
             xTaskNotifyGive( tempTask ); //temperature measurement start
@@ -264,26 +254,32 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     if (xQueueReceive(xQueue, &(message), (TickType_t)850/portTICK_PERIOD_MS) == pdTRUE) {
         printf("RESP: %08x\n",message);
         switch (timeIndex) { //check answers
-            case 0:
-                printf("  Boiler 0 reports %2.1f deg C\n",(float)(message&0x0000ffff)/256);//check answer;
-                break;
-            default:
-                break;
+            case 0: temp[BW]=(float)(message&0x0000ffff)/256; break;
+            case 3: stateflg=       (message&0x0000007f)    ; break;
+            case 5: errorflg=       (message&0x00003f00)/256; break;
+            case 6: pressure=(float)(message&0x0000ffff)/256; break;
+            case 7: temp[DW]=(float)(message&0x0000ffff)/256; break;
+            case 8: temp[RW]=(float)(message&0x0000ffff)/256; break;
+            case 9: curr_mod=(float)(message&0x0000ffff)/256; break;
+            default: break;
         }
     } else {
-        printf("!!! NO RESP: %d\n",resp_idx);
+        printf("!!! NO RESP: resp_idx=%d rx_state=%d response=%08x\n",resp_idx, rx_state, response);
         resp_idx=0, rx_state=READY, response=0;
-        for (i=0;i<idx;i++) {
+#ifdef DEBUG_RECV
+        for (int i=0;i<idx;i++) {
             printf("%4d=%d%s", ((times[i]-oldtime)/10)*10, level[i], i%16?" ":"\n");
             oldtime=times[i];
         }
         idx=0; printf("\n");
     }
     if (idx>500) {
-        for (i=0;i<750;i++) times[i]=times[i+250];
+        for (int i=0;i<750;i++) times[i]=times[i+250];
         idx-=250;
+#endif
     }
-    
+    if (!timeIndex) printf("S1=%2.4f S2=%2.4f BW=%2.4f S3=%2.4f S4=%2.4f RW=%2.4f DW=%2.4f PR=%1.2f ERR=%02x MOD=%2.0f ST=%02x\n", \
+                       temp[S1],temp[S2],temp[BW],temp[S3],temp[S4],temp[RW],temp[DW],pressure,errorflg,curr_mod,stateflg);
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
 } //this is a timer that restarts every 1 second
 

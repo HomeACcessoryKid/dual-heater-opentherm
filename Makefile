@@ -10,8 +10,6 @@ EXTRA_COMPONENTS = \
 	$(abspath esp-cjson) \
 	$(abspath esp-homekit) \
 	$(abspath UDPlogger) \
-
-#    $(abspath esp-adv-button)
     
 FLASH_SIZE ?= 8
 HOMEKIT_SPI_FLASH_BASE_ADDR ?= 0x8C000
@@ -23,9 +21,6 @@ LED_PIN    ?= 13
 SENSOR_PIN ?= 2
 SWITCH_PIN ?= 0
 EXTRA_CFLAGS += -DOT_RECV_PIN=$(OT_RECV_PIN) -DSENSOR_PIN=$(SENSOR_PIN) -DSWITCH_PIN=$(SWITCH_PIN) -DLED_PIN=$(LED_PIN)
-SETPOINT   ?= 27.0F
-HYSTERESIS ?= 1.0F
-EXTRA_CFLAGS += -DHYSTERESIS=$(HYSTERESIS) -DSETPOINT=$(SETPOINT)
 
 ifdef VERSION
 EXTRA_CFLAGS += -DVERSION=\"$(VERSION)\"
