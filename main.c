@@ -24,6 +24,7 @@
 #include <udplogger.h>
 #include "ds18b20/ds18b20.h"
 #include "i2s_dma/i2s_dma.h"
+#include "math.h"
 
 #ifndef VERSION
  #error You must set VERSION=x.y.z to match github version tag x.y.z
@@ -126,8 +127,8 @@ static void handle_rx(uint8_t interrupted_pin) {
         if (400<delta && delta<650 && inv_read) {
             resp_idx=0; response=0; even=0;
             rx_state=RECV;
-            before=now;
         } //else error state but might be a new start, so just stay in this state
+        before=now;
     } else if (rx_state==RECV)  {
         if (900<delta && delta<1150) {
             if (resp_idx<32) {
@@ -153,14 +154,17 @@ static void handle_rx(uint8_t interrupted_pin) {
     }
 }
 
+#define TEMP2HK(n)  do {old_t##n=cur_temp##n.value.float_value; \
+                        cur_temp##n.value.float_value=isnan(temp[S##n])?100.0F:(float)(int)(temp[S##n]*2+0.5)/2; \
+                        if (old_t##n!=cur_temp##n.value.float_value) \
+                            homekit_characteristic_notify(&cur_temp##n,HOMEKIT_FLOAT(cur_temp##n.value.float_value)); \
+                    } while (0) //TODO: do we need to test for changed values or is that embedded in notify routine?
 #define BEAT 10 //in seconds
-#define NAN (0.0F/0.0F)
 #define SENSORS 4
 #define S1 0 //salon temp sensor
 #define S2 1 //upstairs temp sensor
-#define S5 6 //outside temp sensor
 #define S3 2 //outgoing water temp sensor
-#define S4 3 //incoming water temp sensor
+#define S4 3 //outside temp sensor
 #define BW 4 //boiler water temp
 #define RW 5 //return water temp
 #define DW 8 //domestic home water temp
@@ -169,7 +173,7 @@ void temp_task(void *argv) {
     ds18b20_addr_t addrs[SENSORS];
     float temps[SENSORS];
     float old_t1,old_t2,old_t3,old_t4;
-    int sensor_count=0,id,j;
+    int sensor_count=0,id;
 
     while( (sensor_count=ds18b20_scan_devices(SENSOR_PIN, addrs, SENSORS)) != SENSORS) {
         UDPLUS("Only found %d sensors\n",sensor_count);
@@ -179,25 +183,16 @@ void temp_task(void *argv) {
     while(1) {
         ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
         ds18b20_measure_and_read_multi(SENSOR_PIN, addrs, SENSORS, temps);
-        for (j = 0; j < SENSORS; j++) {
+        for (int j = 0; j < SENSORS; j++) {
             // The DS18B20 address 64-bit and my batch turns out family C on https://github.com/cpetrich/counterfeit_DS18B20
             // I have manually selected that I have unique ids using the second hex digit of CRC
             id = (addrs[j]>>56)&0xF;
             temp[id] = temps[j];
-        }
-        old_t1=cur_temp1.value.float_value; //TODO: do we need to test for changed values or is that embedded in notify routine?
-        old_t2=cur_temp2.value.float_value; //TODO: convert this in a macro
-        old_t3=cur_temp3.value.float_value;
-        old_t4=cur_temp4.value.float_value;
-        cur_temp1.value.float_value=isnan(temp[S1])?100.0F:(float)(int)(temp[S1]*2+0.5)/2; //TODO: isnan implicit declaration error in compiler?
-        cur_temp2.value.float_value=isnan(temp[S2])?100.0F:(float)(int)(temp[S2]*2+0.5)/2;
-        cur_temp3.value.float_value=isnan(temp[S3])?100.0F:(float)(int)(temp[S3]*2+0.5)/2;
-        cur_temp4.value.float_value=isnan(temp[S4])?100.0F:(float)(int)(temp[S4]*2+0.5)/2;
-        if (old_t1!=cur_temp1.value.float_value) homekit_characteristic_notify(&cur_temp1,HOMEKIT_FLOAT(cur_temp1.value.float_value));
-        if (old_t2!=cur_temp2.value.float_value) homekit_characteristic_notify(&cur_temp2,HOMEKIT_FLOAT(cur_temp2.value.float_value));
-        if (old_t3!=cur_temp3.value.float_value) homekit_characteristic_notify(&cur_temp3,HOMEKIT_FLOAT(cur_temp3.value.float_value));
-        if (old_t4!=cur_temp4.value.float_value) homekit_characteristic_notify(&cur_temp4,HOMEKIT_FLOAT(cur_temp4.value.float_value));
-        // ds18b20_measure_and_read_multi operation takes about 800ms to run, 3ms start, 750ms wait, 11ms/sensor to read
+        } // ds18b20_measure_and_read_multi operation takes about 800ms to run, 3ms start, 750ms wait, 11ms/sensor to read
+        TEMP2HK(1);
+        TEMP2HK(2);
+        TEMP2HK(3);
+        TEMP2HK(4);
     }
 }
 
@@ -207,8 +202,8 @@ static TaskHandle_t tempTask = NULL;
 int timeIndex=0,switch_state=0;
 TimerHandle_t xTimer;
 void vTimerCallback( TimerHandle_t xTimer ) {
-    uint32_t counter = ( uint32_t ) pvTimerGetTimerID( xTimer );
-    vTimerSetTimerID( xTimer, (void*)counter+1); //136 year to loop
+    uint32_t seconds = ( uint32_t ) pvTimerGetTimerID( xTimer );
+    vTimerSetTimerID( xTimer, (void*)seconds+1); //136 year to loop
     uint32_t message;
     int switch_on=0;
     if (gpio_read(SWITCH_PIN)) switch_state--; else switch_state++; //pin is low when switch is on
@@ -216,7 +211,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     if (switch_state>3) switch_state=3;
     switch_on=switch_state>>1;
     //TODO read recv pin and if it is a ONE, we have an OpenTherm error state
-    printf("St%d Sw%d @%d ",timeIndex,switch_on,counter);
+    printf("St%d Sw%d @%d ",timeIndex,switch_on,seconds);
     switch (timeIndex) { //send commands
         case 0: //measure temperature
             xTaskNotifyGive( tempTask ); //temperature measurement start
@@ -283,8 +278,8 @@ void vTimerCallback( TimerHandle_t xTimer ) {
 #endif
     }
     
-    if (!timeIndex) printf("PR=%1.2f DW=%2.4f S2=%2.4f S3=%2.4f S4=%2.4f ERR=%02x RW=%2.4f BW=%2.4f S1=%2.4f MOD=%2.0f ST=%02x\n", \
-                       pressure,temp[DW],temp[S2],temp[S3],temp[S4],errorflg,temp[RW],temp[BW],temp[S1],curr_mod,stateflg);
+    if (!timeIndex) printf("PR=%1.2f DW=%2.4f S3=%2.4f S4=%2.4f S2=%2.4f ERR=%02x RW=%2.4f BW=%2.4f S1=%2.4f MOD=%02.0f ST=%02x\n", \
+                       pressure,temp[DW],temp[S3],temp[S4],temp[S2],errorflg,temp[RW],temp[BW],temp[S1],curr_mod,stateflg);
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
 } //this is a timer that restarts every 1 second
 
