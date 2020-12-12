@@ -76,6 +76,7 @@ homekit_characteristic_t dis_temp2 = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY
 
 homekit_characteristic_t cur_temp3 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         3.0 );
 homekit_characteristic_t cur_temp4 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         4.0 );
+homekit_characteristic_t cur_temp5 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         5.0 );
 
 // void identify_task(void *_args) {
 //     vTaskDelete(NULL);
@@ -160,11 +161,12 @@ static void handle_rx(uint8_t interrupted_pin) {
                             homekit_characteristic_notify(&cur_temp##n,HOMEKIT_FLOAT(cur_temp##n.value.float_value)); \
                     } while (0) //TODO: do we need to test for changed values or is that embedded in notify routine?
 #define BEAT 10 //in seconds
-#define SENSORS 4
-#define S1 0 //salon temp sensor
+#define SENSORS 5
+#define S1 0 //   salon temp sensor
 #define S2 1 //upstairs temp sensor
-#define S3 2 //outgoing water temp sensor
-#define S4 3 //outside temp sensor
+#define S3 6 // outdoor temp sensor
+#define S4 2 //outgoing water temp sensor
+#define S5 3 // ingoing water temp sensor
 #define BW 4 //boiler water temp
 #define RW 5 //return water temp
 #define DW 8 //domestic home water temp
@@ -193,6 +195,7 @@ void temp_task(void *argv) {
         TEMP2HK(2);
         TEMP2HK(3);
         TEMP2HK(4);
+        TEMP2HK(5);
     }
 }
 
@@ -278,8 +281,10 @@ void vTimerCallback( TimerHandle_t xTimer ) {
 #endif
     }
     
-    if (!timeIndex) printf("PR=%1.2f DW=%2.4f S3=%2.4f S4=%2.4f S2=%2.4f ERR=%02x RW=%2.4f BW=%2.4f S1=%2.4f MOD=%02.0f ST=%02x\n", \
-                       pressure,temp[DW],temp[S3],temp[S4],temp[S2],errorflg,temp[RW],temp[BW],temp[S1],curr_mod,stateflg);
+    if (!timeIndex) {
+        printf("PR=%1.2f DW=%2.4f S4=%2.4f S5=%2.4f S3=%2.4f S2=%2.4f ERR=%02x RW=%2.4f BW=%2.4f S1=%2.4f MOD=%02.0f ST=%02x\n", \
+           pressure,temp[DW],temp[S4],temp[S5],temp[S3],temp[S2],errorflg,temp[RW],temp[BW],temp[S1],curr_mod,stateflg);
+    }
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
 } //this is a timer that restarts every 1 second
 
@@ -321,17 +326,23 @@ homekit_accessory_t *accessories[] = {
                     HOMEKIT_CHARACTERISTIC(IDENTIFY, identify),
                     NULL
                 }),
+            HOMEKIT_SERVICE(TEMPERATURE_SENSOR,
+                .characteristics=(homekit_characteristic_t*[]){
+                    HOMEKIT_CHARACTERISTIC(NAME, "Outdoor T"),
+                    &cur_temp3,
+                    NULL
+                }),
             HOMEKIT_SERVICE(TEMPERATURE_SENSOR, .primary=true,
                 .characteristics=(homekit_characteristic_t*[]){
                     HOMEKIT_CHARACTERISTIC(NAME, "Heater T-out"),
-                    &cur_temp3,
+                    &cur_temp4,
                     &ota_trigger,
                     NULL
                 }),
             HOMEKIT_SERVICE(TEMPERATURE_SENSOR,
                 .characteristics=(homekit_characteristic_t*[]){
                     HOMEKIT_CHARACTERISTIC(NAME, "Heater T-in"),
-                    &cur_temp4,
+                    &cur_temp5,
                     NULL
                 }),
             NULL
