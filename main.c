@@ -174,7 +174,7 @@ float temp[16]; //using id as a single hex digit, then hardcode which sensor get
 void temp_task(void *argv) {
     ds18b20_addr_t addrs[SENSORS];
     float temps[SENSORS];
-    float old_t1,old_t2,old_t3,old_t4;
+    float old_t1,old_t2,old_t3,old_t4,old_t5;
     int sensor_count=0,id;
 
     while( (sensor_count=ds18b20_scan_devices(SENSOR_PIN, addrs, SENSORS)) != SENSORS) {
