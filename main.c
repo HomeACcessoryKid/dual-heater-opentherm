@@ -25,6 +25,7 @@
 #include "ds18b20/ds18b20.h"
 #include "i2s_dma/i2s_dma.h"
 #include "math.h"
+#include <sntp.h>
 
 #ifndef VERSION
  #error You must set VERSION=x.y.z to match github version tag x.y.z
@@ -171,6 +172,7 @@ static void handle_rx(uint8_t interrupted_pin) {
 #define RW 5 //return water temp
 #define DW 8 //domestic home water temp
 float temp[16]; //using id as a single hex digit, then hardcode which sensor gets which meaning
+float S1temp[6],S2temp[6],S1avg,S2avg;
 void temp_task(void *argv) {
     ds18b20_addr_t addrs[SENSORS];
     float temps[SENSORS];
@@ -199,6 +201,44 @@ void temp_task(void *argv) {
     }
 }
 
+#define STABLE 0
+#define HEAT   1
+#define EVAL   2
+
+int eval_time=0,time_on=0,mode=STABLE,heater_down=0;
+float factor=400, prev_setpoint=0, peak_temp=0;
+void heater1(uint32_t seconds) {
+    float new_setpoint=tgt_temp1.value.float_value;
+    printf("Heater1 @ %d: S1avg=%2.4f S2avg=%2.4f", (seconds+10)/60, S1avg, S2avg);
+    if (prev_setpoint!=new_setpoint) {
+        if (prev_setpoint<new_setpoint) {
+            time_on=(factor*(new_setpoint-S1avg));
+            mode=HEAT;
+            prev_setpoint=new_setpoint;
+        }
+        else {
+            mode=EVAL;
+        }
+    }
+    if (mode==HEAT) {
+        if (!time_on--) {
+            mode=EVAL;
+            heater_down=0;
+        } else {
+            heater_down=1;
+        }
+    } else if (mode==EVAL) {
+        eval_time++;
+        if (peak_temp>(S1avg-0.02)) {
+            mode=STABLE;
+            //adjust factor
+            peak_temp=0,eval_time=0;
+        } else if (peak_temp<S1avg) peak_temp=S1avg;
+    }
+    
+    printf(" mode=%d factor=%2.4f time-on=%dmin eval-time=%d peak_temp=%2.4f\n", mode, factor, time_on, eval_time, peak_temp);
+}
+
 float curr_mod=0,pressure=0;
 int   stateflg=0,errorflg=0;
 static TaskHandle_t tempTask = NULL;
@@ -221,8 +261,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             vTaskDelay(1); //prevent interference between OneWire and OT-receiver
             send_OT_frame(0x00190000); //25 read boiler water temperature
             break;
-        case 1: //calculate heater decisions
-            //blabla
+        case 1: //execute heater decisions
             if (tgt_heat2.value.int_value==3) {
                    message=0x10014000; //64 deg
             } else message=0x10010000|(uint32_t)(tgt_temp1.value.float_value*2-1)*256; //range from 19 - 75 deg
@@ -255,7 +294,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             case 0: temp[BW]=(float)(message&0x0000ffff)/256; break;
             case 3:
                 stateflg=(message&0x0000007f);
-                cur_heat1.value.int_value=stateflg&0x8?1:0;
+                cur_heat1.value.int_value=stateflg&0xa?1:0;
                 homekit_characteristic_notify(&cur_heat1,HOMEKIT_UINT8(cur_heat1.value.int_value));
                 break;
             case 5: errorflg=       (message&0x00003f00)/256; break;
@@ -278,17 +317,43 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     if (idx>500) {
         for (int i=0;i<750;i++) times[i]=times[i+250];
         idx-=250;
-#endif
+#endif //DEBUG_RECV
     }
     
     if (!timeIndex) {
+        S1temp[5]=S1temp[4];S1temp[4]=S1temp[3];S1temp[3]=S1temp[2];S1temp[2]=S1temp[1];S1temp[1]=S1temp[0];
+        S2temp[5]=S2temp[4];S2temp[4]=S2temp[3];S2temp[3]=S2temp[2];S2temp[2]=S2temp[1];S2temp[1]=S2temp[0];
+        if (!isnan(temp[S1])) S1temp[0]=temp[S1]; if (!isnan(temp[S2])) S2temp[0]=temp[S2];
+        S1avg=(S1temp[0]+S1temp[1]+S1temp[2]+S1temp[3]+S1temp[4]+S1temp[5])/6.0;
+        S2avg=(S2temp[0]+S2temp[1]+S2temp[2]+S2temp[3]+S2temp[4]+S2temp[5])/6.0;
         printf("PR=%1.2f DW=%2.4f S4=%2.4f S5=%2.4f S3=%2.4f S2=%2.4f ERR=%02x RW=%2.4f BW=%2.4f S1=%2.4f MOD=%02.0f ST=%02x\n", \
            pressure,temp[DW],temp[S4],temp[S5],temp[S3],temp[S2],errorflg,temp[RW],temp[BW],temp[S1],curr_mod,stateflg);
     }
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
+    if (seconds%60==50) { //allow 6 temperature measurments to make sure all info is loaded
+        heater1(seconds);
+//         heater2();
+    }
 } //this is a timer that restarts every 1 second
 
+#define SNTP_SERVERS "0.pool.ntp.org", "1.pool.ntp.org", "2.pool.ntp.org", "3.pool.ntp.org"
 void device_init() {
+    //time support
+    const char *servers[] = {SNTP_SERVERS};
+	sntp_set_update_delay(24*60*60000); //SNTP will request an update every 24 hour
+	const struct timezone tz = {1*60, 1}; //Set GMT+1 zone, daylight savings off
+	sntp_initialize(&tz);
+	//sntp_initialize(NULL);
+	sntp_set_servers(servers, sizeof(servers) / sizeof(char*)); //Servers must be configured right after initialization
+	
+    time_t ts;
+    do {
+        ts = time(NULL);
+        if (ts == ((time_t)-1)) printf("ts=-1, ");
+        vTaskDelay(1);
+    } while (!(ts>1608567890)); //Mon Dec 21 17:24:50 CET 2020
+    printf("TIME: %ds %u=%s\n", ((unsigned int)ts)%86400, (unsigned int) ts, ctime(&ts));
+
 //     gpio_enable(LED_PIN, GPIO_OUTPUT); gpio_write(LED_PIN, 0);
     gpio_set_pullup(SENSOR_PIN, true, true);
     gpio_enable(SWITCH_PIN, GPIO_INPUT);
