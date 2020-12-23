@@ -234,11 +234,11 @@ void heater1(uint32_t seconds) {
         if (prev_setpoint<new_setpoint) {
             time_on=(factor*(new_setpoint-S1avg));
             mode=HEAT;
-            prev_setpoint=new_setpoint;
         }
         else {
             mode=EVAL;
         }
+        prev_setpoint=new_setpoint;
     }
     if (mode==HEAT) {
         if (!time_on--) {
@@ -249,7 +249,7 @@ void heater1(uint32_t seconds) {
         }
     } else if (mode==EVAL) {
         eval_time++;
-        if (peak_temp>(S1avg+0.02)) {
+        if (peak_temp>(S1avg+0.07)) {
             mode=STABLE;
             //adjust factor
             peak_temp=0,eval_time=0;
