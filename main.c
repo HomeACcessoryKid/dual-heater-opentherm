@@ -228,8 +228,8 @@ float factor=400, prev_setpoint=0, peak_temp=0;
 void heater1(uint32_t seconds) {
     float new_setpoint=tgt_temp1.value.float_value;
     time_t ts = time(NULL);
-    char timestring[26]; ctime_r(&ts,timestring); timestring[24]=0;
-    printf("Heater1 @ %d: S1avg=%2.4f S2avg=%2.4f %s", (seconds+10)/60, S1avg, S2avg, timestring);
+    char timestring[26]; ctime_r(&ts,timestring); timestring[19]=0;
+    printf("Heater1 @ %d: S1avg=%2.4f S2avg=%2.4f %s", (seconds+10)/60, S1avg, S2avg, timestring+4);
     if (prev_setpoint!=new_setpoint) {
         if (prev_setpoint<new_setpoint) {
             time_on=(factor*(new_setpoint-S1avg));
@@ -249,7 +249,7 @@ void heater1(uint32_t seconds) {
         }
     } else if (mode==EVAL) {
         eval_time++;
-        if (peak_temp>(S1avg-0.02)) {
+        if (peak_temp>(S1avg+0.02)) {
             mode=STABLE;
             //adjust factor
             peak_temp=0,eval_time=0;
