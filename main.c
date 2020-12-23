@@ -156,6 +156,24 @@ static void handle_rx(uint8_t interrupted_pin) {
     }
 }
 
+#define SNTP_SERVERS "0.pool.ntp.org", "1.pool.ntp.org", "2.pool.ntp.org", "3.pool.ntp.org"
+void time_task(void *argv) {
+    while (sdk_wifi_station_get_connect_status() != STATION_GOT_IP) vTaskDelay(20); //Check if we have an IP every 200ms
+    const char *servers[] = {SNTP_SERVERS};
+	sntp_set_update_delay(24*60*60000); //SNTP will request an update every 24 hour
+    const struct timezone tz = {1*60, 0}; //Set GMT+1 zone, daylight savings off
+    sntp_initialize(&tz);
+//  sntp_initialize(NULL);
+    sntp_set_servers(servers, sizeof(servers) / sizeof(char*)); //Servers must be configured right after initialization
+    time_t ts;
+    do {ts = time(NULL);
+        if (ts == ((time_t)-1)) printf("ts=-1 ");
+        vTaskDelay(10);
+    } while (!(ts>1608567890)); //Mon Dec 21 17:24:50 CET 2020
+    printf("TIME: %ds %u=%s\n", ((unsigned int)ts)%86400, (unsigned int) ts, ctime(&ts));
+    vTaskDelete(NULL); //check if NTP keeps running without this task
+}
+
 #define TEMP2HK(n)  do {old_t##n=cur_temp##n.value.float_value; \
                         cur_temp##n.value.float_value=isnan(temp[S##n])?100.0F:(float)(int)(temp[S##n]*2+0.5)/2; \
                         if (old_t##n!=cur_temp##n.value.float_value) \
@@ -209,7 +227,9 @@ int eval_time=0,time_on=0,mode=STABLE,heater_down=0;
 float factor=400, prev_setpoint=0, peak_temp=0;
 void heater1(uint32_t seconds) {
     float new_setpoint=tgt_temp1.value.float_value;
-    printf("Heater1 @ %d: S1avg=%2.4f S2avg=%2.4f", (seconds+10)/60, S1avg, S2avg);
+    time_t ts = time(NULL);
+    char timestring[26]; ctime_r(&ts,timestring); timestring[24]=0;
+    printf("Heater1 @ %d: S1avg=%2.4f S2avg=%2.4f %s", (seconds+10)/60, S1avg, S2avg, timestring);
     if (prev_setpoint!=new_setpoint) {
         if (prev_setpoint<new_setpoint) {
             time_on=(factor*(new_setpoint-S1avg));
@@ -336,24 +356,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     }
 } //this is a timer that restarts every 1 second
 
-#define SNTP_SERVERS "0.pool.ntp.org", "1.pool.ntp.org", "2.pool.ntp.org", "3.pool.ntp.org"
 void device_init() {
-    //time support
-    const char *servers[] = {SNTP_SERVERS};
-	sntp_set_update_delay(24*60*60000); //SNTP will request an update every 24 hour
-	const struct timezone tz = {1*60, 1}; //Set GMT+1 zone, daylight savings off
-	sntp_initialize(&tz);
-	//sntp_initialize(NULL);
-	sntp_set_servers(servers, sizeof(servers) / sizeof(char*)); //Servers must be configured right after initialization
-	
-    time_t ts;
-    do {
-        ts = time(NULL);
-        if (ts == ((time_t)-1)) printf("ts=-1, ");
-        vTaskDelay(1);
-    } while (!(ts>1608567890)); //Mon Dec 21 17:24:50 CET 2020
-    printf("TIME: %ds %u=%s\n", ((unsigned int)ts)%86400, (unsigned int) ts, ctime(&ts));
-
 //     gpio_enable(LED_PIN, GPIO_OUTPUT); gpio_write(LED_PIN, 0);
     gpio_set_pullup(SENSOR_PIN, true, true);
     gpio_enable(SWITCH_PIN, GPIO_INPUT);
@@ -372,6 +375,7 @@ void device_init() {
 
     xQueue = xQueueCreate(1, sizeof(uint32_t));
     xTaskCreate(temp_task,"Temp", 512, NULL, 1, &tempTask);
+    xTaskCreate(time_task,"Time", 512, NULL, 1, NULL);
     xTimer=xTimerCreate( "Timer", 1000/portTICK_PERIOD_MS, pdTRUE, (void*)0, vTimerCallback);
     xTimerStart(xTimer, 0);
 }
