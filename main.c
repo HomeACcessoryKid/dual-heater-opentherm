@@ -160,7 +160,7 @@ static void handle_rx(uint8_t interrupted_pin) {
 void time_task(void *argv) {
     while (sdk_wifi_station_get_connect_status() != STATION_GOT_IP) vTaskDelay(20); //Check if we have an IP every 200ms
     const char *servers[] = {SNTP_SERVERS};
-	sntp_set_update_delay(24*60*60000); //SNTP will request an update every 24 hour
+	sntp_set_update_delay(8*60*60000); //SNTP will request an update every 8 hours
     const struct timezone tz = {1*60, 0}; //Set GMT+1 zone, daylight savings off
     sntp_initialize(&tz);
 //  sntp_initialize(NULL);
@@ -375,7 +375,7 @@ void device_init() {
 
     xQueue = xQueueCreate(1, sizeof(uint32_t));
     xTaskCreate(temp_task,"Temp", 512, NULL, 1, &tempTask);
-    xTaskCreate(time_task,"Time", 512, NULL, 1, NULL);
+    xTaskCreate(time_task,"Time", 512, NULL, 5, NULL);
     xTimer=xTimerCreate( "Timer", 1000/portTICK_PERIOD_MS, pdTRUE, (void*)0, vTimerCallback);
     xTimerStart(xTimer, 0);
 }
