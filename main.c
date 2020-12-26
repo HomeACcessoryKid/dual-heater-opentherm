@@ -25,7 +25,7 @@
 #include "ds18b20/ds18b20.h"
 #include "i2s_dma/i2s_dma.h"
 #include "math.h"
-#include <sntp.h>
+#include <lwip/apps/sntp.h>
 
 #ifndef VERSION
  #error You must set VERSION=x.y.z to match github version tag x.y.z
@@ -156,15 +156,14 @@ static void handle_rx(uint8_t interrupted_pin) {
     }
 }
 
-#define SNTP_SERVERS "0.pool.ntp.org", "1.pool.ntp.org", "2.pool.ntp.org", "3.pool.ntp.org"
 void time_task(void *argv) {
+    setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1); tzset();
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_setservername(0, "0.pool.ntp.org");
+    sntp_setservername(1, "1.pool.ntp.org");
+    sntp_setservername(2, "2.pool.ntp.org");
     while (sdk_wifi_station_get_connect_status() != STATION_GOT_IP) vTaskDelay(20); //Check if we have an IP every 200ms
-    const char *servers[] = {SNTP_SERVERS};
-	sntp_set_update_delay(8*60*60000); //SNTP will request an update every 8 hours
-    const struct timezone tz = {1*60, 0}; //Set GMT+1 zone, daylight savings off
-    sntp_initialize(&tz);
-//  sntp_initialize(NULL);
-    sntp_set_servers(servers, sizeof(servers) / sizeof(char*)); //Servers must be configured right after initialization
+    sntp_init();
     time_t ts;
     do {ts = time(NULL);
         if (ts == ((time_t)-1)) printf("ts=-1 ");
@@ -229,10 +228,14 @@ void heater1(uint32_t seconds) {
     float new_setpoint=tgt_temp1.value.float_value;
     time_t ts = time(NULL);
     char timestring[26]; ctime_r(&ts,timestring); timestring[19]=0;
-    printf("Heater1 @ %d: S1avg=%2.4f S2avg=%2.4f %s", (seconds+10)/60, S1avg, S2avg, timestring+4);
+    printf("Heater1 @ %4d:%s S1avg=%2.4f S2avg=%2.4f", (seconds+10)/60, timestring+4, S1avg, S2avg);
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    struct tm *tm = localtime(&(tv.tv_sec));
+    printf(" tvs:%d tvu:%6d tms:%2d tmm:%2d tmwd:%d", (int)tv.tv_sec, (int)tv.tv_usec, tm->tm_sec, tm->tm_min, tm->tm_wday);
     if (prev_setpoint!=new_setpoint) {
         if (prev_setpoint<new_setpoint) {
-            time_on=(factor*(new_setpoint-S1avg));
+            time_on=(factor*(21.5-S1avg));
             mode=HEAT;
         }
         else {
@@ -375,7 +378,7 @@ void device_init() {
 
     xQueue = xQueueCreate(1, sizeof(uint32_t));
     xTaskCreate(temp_task,"Temp", 512, NULL, 1, &tempTask);
-    xTaskCreate(time_task,"Time", 512, NULL, 5, NULL);
+    xTaskCreate(time_task,"Time", 512, NULL, 6, NULL);
     xTimer=xTimerCreate( "Timer", 1000/portTICK_PERIOD_MS, pdTRUE, (void*)0, vTimerCallback);
     xTimerStart(xTimer, 0);
 }
