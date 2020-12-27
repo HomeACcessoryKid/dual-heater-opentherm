@@ -226,6 +226,7 @@ void temp_task(void *argv) {
 
 int eval_time=0,time_on=0,mode=STABLE,heater_down=0;
 float factor=800, prev_setpoint=0, peak_temp=0;
+int   stateflg=0,errorflg=0;
 void heater(uint32_t seconds) {
     if (!time_set) return; //need reliable time
     float new_setpoint=tgt_temp1.value.float_value;
@@ -261,12 +262,11 @@ void heater(uint32_t seconds) {
         } else if (peak_temp<S1avg) peak_temp=S1avg;
     }
     
-    printf("S1avg=%2.4f S2avg=%2.4f S3avg=%2.4f", S1avg, S2avg, S3avg);
-    printf(" mode=%d factor=%2.4f time-on=%dmin eval-time=%d peak_temp=%2.4f\n", mode, factor, time_on, eval_time, peak_temp);
+    printf("S1=%2.4f S2=%2.4f S3=%2.4f avg mode=%d factor=%2.1f time-on=%dmin eval-time=%d peak_temp=%2.4f ST=%02x\n", \
+            S1avg,   S2avg,   S3avg, mode, factor, time_on, eval_time, peak_temp, stateflg);
 }
 
 float curr_mod=0,pressure=0;
-int   stateflg=0,errorflg=0;
 static TaskHandle_t tempTask = NULL;
 int timeIndex=0,switch_state=0;
 TimerHandle_t xTimer;
