@@ -57,7 +57,7 @@
  * PRODUCTION CODE SHOULD USE AN APPLICATION-APPROPRIATE CLOCK DISCIPLINE
  */
 #ifndef SNTP_IMPL_STEP_THRESHOLD
-#define SNTP_IMPL_STEP_THRESHOLD 125000
+#define SNTP_IMPL_STEP_THRESHOLD 250000
 #endif
 
 
@@ -72,9 +72,7 @@
  */
 void
 sntp_impl_set_system_time_us(uint32_t secs, uint32_t us) {
-    struct timeval new;
-    struct timeval old;
-    struct timeval dt;
+    struct timeval new, old, dt;
 
     gettimeofday(&old, NULL);
     new.tv_sec = secs;

@@ -44,6 +44,8 @@
 
 #define SNTP_SERVER_DNS 1
 
+#define SNTP_MAX_SERVERS 3
+
 /*
  * 0 -- off
  * 1 -- enables address/port check
@@ -59,8 +61,7 @@
 #define SNTP_STARTUP_DELAY 0
 
 /* 60 seconds is lower threshold by NTPv4 spec */
-//#define SNTP_UPDATE_DELAY (64 * 1000)
-#define SNTP_UPDATE_DELAY (4 * 3600 * 1000)
+//#define SNTP_UPDATE_DELAY (64 * 1000) //default is 1 hour = 3600 * 1000
 
 /*
  * Getter has to be a inline #define
