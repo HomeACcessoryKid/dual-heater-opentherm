@@ -25,7 +25,7 @@
 #include "ds18b20/ds18b20.h"
 #include "i2s_dma/i2s_dma.h"
 #include "math.h"
-#include <sntp.h>
+#include <lwip/apps/sntp.h>
 
 #ifndef VERSION
  #error You must set VERSION=x.y.z to match github version tag x.y.z
@@ -156,21 +156,22 @@ static void handle_rx(uint8_t interrupted_pin) {
     }
 }
 
-#define SNTP_SERVERS "0.pool.ntp.org", "1.pool.ntp.org", "2.pool.ntp.org", "3.pool.ntp.org"
+int  time_set=0;
 void time_task(void *argv) {
+    setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1); tzset();
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_setservername(0, "0.pool.ntp.org");
+    sntp_setservername(1, "1.pool.ntp.org");
+    sntp_setservername(2, "2.pool.ntp.org");
     while (sdk_wifi_station_get_connect_status() != STATION_GOT_IP) vTaskDelay(20); //Check if we have an IP every 200ms
-    const char *servers[] = {SNTP_SERVERS};
-	sntp_set_update_delay(8*60*60000); //SNTP will request an update every 8 hours
-    const struct timezone tz = {1*60, 0}; //Set GMT+1 zone, daylight savings off
-    sntp_initialize(&tz);
-//  sntp_initialize(NULL);
-    sntp_set_servers(servers, sizeof(servers) / sizeof(char*)); //Servers must be configured right after initialization
+    sntp_init();
     time_t ts;
     do {ts = time(NULL);
         if (ts == ((time_t)-1)) printf("ts=-1 ");
         vTaskDelay(10);
     } while (!(ts>1608567890)); //Mon Dec 21 17:24:50 CET 2020
-    printf("TIME: %ds %u=%s\n", ((unsigned int)ts)%86400, (unsigned int) ts, ctime(&ts));
+    printf("TIME SET: %u=%s", (unsigned int) ts, ctime(&ts));
+    time_set=1;
     vTaskDelete(NULL); //check if NTP keeps running without this task
 }
 
@@ -190,7 +191,7 @@ void time_task(void *argv) {
 #define RW 5 //return water temp
 #define DW 8 //domestic home water temp
 float temp[16]; //using id as a single hex digit, then hardcode which sensor gets which meaning
-float S1temp[6],S2temp[6],S1avg,S2avg;
+float S1temp[6],S2temp[6],S3temp[6],S1avg,S2avg,S3avg;
 void temp_task(void *argv) {
     ds18b20_addr_t addrs[SENSORS];
     float temps[SENSORS];
@@ -224,15 +225,20 @@ void temp_task(void *argv) {
 #define EVAL   2
 
 int eval_time=0,time_on=0,mode=STABLE,heater_down=0;
-float factor=400, prev_setpoint=0, peak_temp=0;
-void heater1(uint32_t seconds) {
+float factor=800, prev_setpoint=0, peak_temp=0;
+int   stateflg=0,errorflg=0;
+void heater(uint32_t seconds) {
+    if (!time_set) return; //need reliable time
     float new_setpoint=tgt_temp1.value.float_value;
-    time_t ts = time(NULL);
-    char timestring[26]; ctime_r(&ts,timestring); timestring[19]=0;
-    printf("Heater1 @ %d: S1avg=%2.4f S2avg=%2.4f %s", (seconds+10)/60, S1avg, S2avg, timestring+4);
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    struct tm *tm = localtime(&(tv.tv_sec));
+    printf("Heater@ %4d DST%d day%d wd%d %02d:%02d:%02d.%06d = %s", \
+            (seconds+10)/60,tm->tm_isdst,tm->tm_yday,tm->tm_wday, \
+            tm->tm_hour,tm->tm_min,tm->tm_sec,(int)tv.tv_usec,ctime(&(tv.tv_sec)));
     if (prev_setpoint!=new_setpoint) {
         if (prev_setpoint<new_setpoint) {
-            time_on=(factor*(new_setpoint-S1avg));
+            time_on=(factor*(21.5-S1avg));
             mode=HEAT;
         }
         else {
@@ -256,11 +262,11 @@ void heater1(uint32_t seconds) {
         } else if (peak_temp<S1avg) peak_temp=S1avg;
     }
     
-    printf(" mode=%d factor=%2.4f time-on=%dmin eval-time=%d peak_temp=%2.4f\n", mode, factor, time_on, eval_time, peak_temp);
+    printf("S1=%2.4f S2=%2.4f S3=%2.4f avg mode=%d factor=%2.1f time-on=%dmin eval-time=%d peak_temp=%2.4f ST=%02x\n", \
+            S1avg,   S2avg,   S3avg, mode, factor, time_on, eval_time, peak_temp, stateflg);
 }
 
 float curr_mod=0,pressure=0;
-int   stateflg=0,errorflg=0;
 static TaskHandle_t tempTask = NULL;
 int timeIndex=0,switch_state=0;
 TimerHandle_t xTimer;
@@ -343,16 +349,17 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     if (!timeIndex) {
         S1temp[5]=S1temp[4];S1temp[4]=S1temp[3];S1temp[3]=S1temp[2];S1temp[2]=S1temp[1];S1temp[1]=S1temp[0];
         S2temp[5]=S2temp[4];S2temp[4]=S2temp[3];S2temp[3]=S2temp[2];S2temp[2]=S2temp[1];S2temp[1]=S2temp[0];
-        if (!isnan(temp[S1])) S1temp[0]=temp[S1]; if (!isnan(temp[S2])) S2temp[0]=temp[S2];
+        S3temp[5]=S3temp[4];S3temp[4]=S3temp[3];S3temp[3]=S3temp[2];S3temp[2]=S3temp[1];S3temp[1]=S3temp[0];
+        if(!isnan(temp[S1]))S1temp[0]=temp[S1];if(!isnan(temp[S2]))S2temp[0]=temp[S2];if(!isnan(temp[S3]))S3temp[0]=temp[S3];
         S1avg=(S1temp[0]+S1temp[1]+S1temp[2]+S1temp[3]+S1temp[4]+S1temp[5])/6.0;
         S2avg=(S2temp[0]+S2temp[1]+S2temp[2]+S2temp[3]+S2temp[4]+S2temp[5])/6.0;
-        printf("PR=%1.2f DW=%2.4f S4=%2.4f S5=%2.4f S3=%2.4f S2=%2.4f ERR=%02x RW=%2.4f BW=%2.4f S1=%2.4f MOD=%02.0f ST=%02x\n", \
-           pressure,temp[DW],temp[S4],temp[S5],temp[S3],temp[S2],errorflg,temp[RW],temp[BW],temp[S1],curr_mod,stateflg);
+        S3avg=(S3temp[0]+S3temp[1]+S3temp[2]+S3temp[3]+S3temp[4]+S3temp[5])/6.0;
+        printf("S1=%2.4f S2=%2.4f S3=%2.4f PR=%1.2f DW=%2.4f S4=%2.4f S5=%2.4f ERR=%02x RW=%2.4f BW=%2.4f MOD=%02.0f ST=%02x\n", \
+           temp[S1],temp[S2],temp[S3],pressure,temp[DW],temp[S4],temp[S5],errorflg,temp[RW],temp[BW],curr_mod,stateflg);
     }
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
     if (seconds%60==50) { //allow 6 temperature measurments to make sure all info is loaded
-        heater1(seconds);
-//         heater2();
+        heater(seconds);
     }
 } //this is a timer that restarts every 1 second
 
@@ -375,7 +382,7 @@ void device_init() {
 
     xQueue = xQueueCreate(1, sizeof(uint32_t));
     xTaskCreate(temp_task,"Temp", 512, NULL, 1, &tempTask);
-    xTaskCreate(time_task,"Time", 512, NULL, 5, NULL);
+    xTaskCreate(time_task,"Time", 512, NULL, 6, NULL);
     xTimer=xTimerCreate( "Timer", 1000/portTICK_PERIOD_MS, pdTRUE, (void*)0, vTimerCallback);
     xTimerStart(xTimer, 0);
 }

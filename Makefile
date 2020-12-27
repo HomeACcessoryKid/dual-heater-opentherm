@@ -1,7 +1,7 @@
 PROGRAM = main
 
 EXTRA_COMPONENTS = \
-	extras/sntp \
+	extras/timekeeping \
 	extras/http-parser \
 	extras/rboot-ota \
     extras/onewire \
