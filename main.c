@@ -69,7 +69,7 @@ homekit_characteristic_t tgt_temp1 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,
 homekit_characteristic_t cur_temp1 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         1.0 );
 homekit_characteristic_t dis_temp1 = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY_UNITS,     0 );
 
-homekit_characteristic_t tgt_heat2 = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE,  1 );
+homekit_characteristic_t tgt_heat2 = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE,  3 );
 homekit_characteristic_t cur_heat2 = HOMEKIT_CHARACTERISTIC_(CURRENT_HEATING_COOLING_STATE, 0 );
 homekit_characteristic_t tgt_temp2 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         38.0 );
 homekit_characteristic_t cur_temp2 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         2.0 );
@@ -176,7 +176,7 @@ void time_task(void *argv) {
 }
 
 #define TEMP2HK(n)  do {old_t##n=cur_temp##n.value.float_value; \
-                        cur_temp##n.value.float_value=isnan(temp[S##n])?100.0F:(float)(int)(temp[S##n]*2+0.5)/2; \
+                        cur_temp##n.value.float_value=isnan(temp[S##n])?S##n##avg:(float)(int)(temp[S##n]*10+0.5)/10; \
                         if (old_t##n!=cur_temp##n.value.float_value) \
                             homekit_characteristic_notify(&cur_temp##n,HOMEKIT_FLOAT(cur_temp##n.value.float_value)); \
                     } while (0) //TODO: do we need to test for changed values or is that embedded in notify routine?
@@ -191,7 +191,7 @@ void time_task(void *argv) {
 #define RW 5 //return water temp
 #define DW 8 //domestic home water temp
 float temp[16]; //using id as a single hex digit, then hardcode which sensor gets which meaning
-float S1temp[6],S2temp[6],S3temp[6],S1avg,S2avg,S3avg;
+float S1temp[6],S2temp[6],S3temp[6],S1avg,S2avg,S3avg,S4avg,S5avg;
 void temp_task(void *argv) {
     ds18b20_addr_t addrs[SENSORS];
     float temps[SENSORS];
@@ -224,46 +224,57 @@ void temp_task(void *argv) {
 #define HEAT   1
 #define EVAL   2
 
-int eval_time=0,time_on=0,mode=STABLE,heater_down=0;
-float factor=800, prev_setpoint=0, peak_temp=0;
+int peak_time=0,time_on=0,mode=EVAL,heater1=0;
+float factor=650, prev_setpoint=21.5, peak_temp=0;
+time_t heat_till=0;
 int   stateflg=0,errorflg=0;
 void heater(uint32_t seconds) {
     if (!time_set) return; //need reliable time
-    float new_setpoint=tgt_temp1.value.float_value;
     struct timeval tv;
     gettimeofday(&tv, NULL);
     struct tm *tm = localtime(&(tv.tv_sec));
     printf("Heater@ %4d DST%d day%d wd%d %02d:%02d:%02d.%06d = %s", \
             (seconds+10)/60,tm->tm_isdst,tm->tm_yday,tm->tm_wday, \
             tm->tm_hour,tm->tm_min,tm->tm_sec,(int)tv.tv_usec,ctime(&(tv.tv_sec)));
-    if (prev_setpoint!=new_setpoint) {
-        if (prev_setpoint<new_setpoint) {
-            time_on=(factor*(21.5-S1avg));
-            mode=HEAT;
-        }
-        else {
-            mode=EVAL;
-        }
-        prev_setpoint=new_setpoint;
+
+    float setpoint=tgt_temp1.value.float_value;
+    if (setpoint!=prev_setpoint) {
+        if (setpoint>prev_setpoint) {
+            time_on=factor*(setpoint-S1avg);
+            if (time_on>15) { //15 minutes at least, else too quick
+                heat_till=tv.tv_sec+(time_on*60);
+                mode=HEAT;
+            } else mode=STABLE;
+        } else mode=EVAL;
+        prev_setpoint=setpoint;
     }
+
     if (mode==HEAT) {
-        if (!time_on--) {
+        if (tv.tv_sec>heat_till) {
             mode=EVAL;
-            heater_down=0;
+            heater1=0;
         } else {
-            heater_down=1;
+            heater1=1;
         }
     } else if (mode==EVAL) {
-        eval_time++;
-        if (peak_temp>(S1avg+0.07)) {
+        if (peak_temp<S1avg) {
+            peak_temp=S1avg;
+            peak_time=0;
+        } else if (S1avg<(peak_temp-0.07) || peak_time++>30) {
             mode=STABLE;
             //adjust factor
-            peak_temp=0,eval_time=0;
-        } else if (peak_temp<S1avg) peak_temp=S1avg;
+            peak_temp=0,peak_time=0;
+        }
+    } else if (mode==STABLE) {
+        time_on=(factor*(setpoint-S1avg)*0.2);
+        if (time_on>15) {
+            heat_till=tv.tv_sec+(time_on*60);
+            mode=HEAT;
+        }
     }
     
-    printf("S1=%2.4f S2=%2.4f S3=%2.4f avg mode=%d factor=%2.1f time-on=%dmin eval-time=%d peak_temp=%2.4f ST=%02x\n", \
-            S1avg,   S2avg,   S3avg, mode, factor, time_on, eval_time, peak_temp, stateflg);
+    printf("S1=%2.4f S2=%2.4f S3=%2.4f f=%2.1f time-on=%dmin peak_time=%d peak_temp=%2.4f ST=%02x mode=%d till %s", \
+            S1avg,S2avg,S3avg,factor,time_on,peak_time,peak_temp,stateflg,mode,mode==HEAT?ctime(&heat_till):"\n");
 }
 
 float curr_mod=0,pressure=0;
@@ -288,23 +299,22 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             send_OT_frame(0x00190000); //25 read boiler water temperature
             break;
         case 1: //execute heater decisions
-            if (tgt_heat2.value.int_value==3) {
+            if (tgt_heat2.value.int_value==1) {
                    message=0x10014000; //64 deg
+            } else if (tgt_heat2.value.int_value==3) { //run heater algoritm for floor heating
+                   message=0x10014100; //65 deg
             } else message=0x10010000|(uint32_t)(tgt_temp1.value.float_value*2-1)*256; //range from 19 - 75 deg
             send_OT_frame(message); //1  CH setpoint in deg C
             break;
         case 2:
-            if (tgt_heat2.value.int_value==3) {
-                   message=0x100e6400; //100%
-            } else message=0x100e0000|(uint32_t)(((tgt_temp2.value.float_value-10)*(100.0/28.0))*256);
-            send_OT_frame(message); //14 max modulation level
-            break;
-        case 3:
-            if (tgt_heat2.value.int_value==3) {
+            if (tgt_heat2.value.int_value==1) {
                    message=0x00000200|(switch_on?0x100:0x000);
-            } else message=0x00000000|(tgt_heat1.value.int_value<<8);
+            } else if (tgt_heat2.value.int_value==3) { //run heater algoritm for floor heating
+                   message=0x00000200|(  heater1?0x100:0x000);
+            } else message=0x00000200|(tgt_heat1.value.int_value<<8);
             send_OT_frame( message ); //0  enable CH and DHW
             break; 
+        case 3: send_OT_frame( 0x100e6400 ); break; //14 max modulation level 100%
         case 4: send_OT_frame( 0x00380000 ); break; //56 DHW setpoint write
         case 5: send_OT_frame( 0x00050000 ); break; //5  app specific fault flags
         case 6: send_OT_frame( 0x00120000 ); break; //18 CH water pressure
@@ -318,7 +328,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
         printf("RSP:%08x\n",message);
         switch (timeIndex) { //check answers
             case 0: temp[BW]=(float)(message&0x0000ffff)/256; break;
-            case 3:
+            case 2:
                 stateflg=(message&0x0000007f);
                 cur_heat1.value.int_value=stateflg&0xa?1:0;
                 homekit_characteristic_notify(&cur_heat1,HOMEKIT_UINT8(cur_heat1.value.int_value));
@@ -354,6 +364,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
         S1avg=(S1temp[0]+S1temp[1]+S1temp[2]+S1temp[3]+S1temp[4]+S1temp[5])/6.0;
         S2avg=(S2temp[0]+S2temp[1]+S2temp[2]+S2temp[3]+S2temp[4]+S2temp[5])/6.0;
         S3avg=(S3temp[0]+S3temp[1]+S3temp[2]+S3temp[3]+S3temp[4]+S3temp[5])/6.0;
+        S4avg=temp[S4]; S5avg=temp[S5];
         printf("S1=%2.4f S2=%2.4f S3=%2.4f PR=%1.2f DW=%2.4f S4=%2.4f S5=%2.4f ERR=%02x RW=%2.4f BW=%2.4f MOD=%02.0f ST=%02x\n", \
            temp[S1],temp[S2],temp[S3],pressure,temp[DW],temp[S4],temp[S5],errorflg,temp[RW],temp[BW],curr_mod,stateflg);
     }
