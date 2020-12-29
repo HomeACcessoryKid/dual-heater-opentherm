@@ -237,6 +237,7 @@ void heater(uint32_t seconds) {
             (seconds+10)/60,tm->tm_isdst,tm->tm_yday,tm->tm_wday, \
             tm->tm_hour,tm->tm_min,tm->tm_sec,(int)tv.tv_usec,ctime(&(tv.tv_sec)));
 
+    heater1=0;
     float setpoint=tgt_temp1.value.float_value;
     if (setpoint!=prev_setpoint) {
         if (setpoint>prev_setpoint) {
@@ -251,9 +252,10 @@ void heater(uint32_t seconds) {
 
     if (mode==HEAT) {
         if (tv.tv_sec>heat_till) {
+            time_on=0;
             mode=EVAL;
-            heater1=0;
         } else {
+            time_on--;
             heater1=1;
         }
     } else if (mode==EVAL) {
