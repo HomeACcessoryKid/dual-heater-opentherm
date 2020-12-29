@@ -65,7 +65,7 @@ homekit_characteristic_t revision     = HOMEKIT_CHARACTERISTIC_(FIRMWARE_REVISIO
 
 homekit_characteristic_t tgt_heat1 = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE,  3 );
 homekit_characteristic_t cur_heat1 = HOMEKIT_CHARACTERISTIC_(CURRENT_HEATING_COOLING_STATE, 0 );
-homekit_characteristic_t tgt_temp1 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         19.5 );
+homekit_characteristic_t tgt_temp1 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         21.5 );
 homekit_characteristic_t cur_temp1 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         1.0 );
 homekit_characteristic_t dis_temp1 = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY_UNITS,     0 );
 
@@ -226,7 +226,7 @@ void temp_task(void *argv) {
 
 int peak_time=0,time_on=0,mode=EVAL,heater1=0;
 float factor=650, prev_setpoint=21.5, peak_temp=0;
-time_t heat_till=0;
+time_t heat_till=0, sevenAM=0;
 int   stateflg=0,errorflg=0;
 void heater(uint32_t seconds) {
     if (!time_set) return; //need reliable time
@@ -240,13 +240,7 @@ void heater(uint32_t seconds) {
     heater1=0;
     float setpoint=tgt_temp1.value.float_value;
     if (setpoint!=prev_setpoint) {
-        if (setpoint>prev_setpoint) {
-            time_on=factor*(setpoint-S1avg);
-            if (time_on>15) { //15 minutes at least, else too quick
-                heat_till=tv.tv_sec+(time_on*60);
-                mode=HEAT;
-            } else mode=STABLE;
-        } else mode=EVAL;
+        if (setpoint>prev_setpoint) mode=STABLE; else mode=EVAL;
         prev_setpoint=setpoint;
     }
 
@@ -254,6 +248,8 @@ void heater(uint32_t seconds) {
         if (tv.tv_sec>heat_till) {
             time_on=0;
             mode=EVAL;
+            peak_temp=S1avg;
+            peak_time=0;
         } else {
             time_on--;
             heater1=1;
@@ -268,15 +264,32 @@ void heater(uint32_t seconds) {
             peak_temp=0,peak_time=0;
         }
     } else if (mode==STABLE) {
-        time_on=(factor*(setpoint-S1avg)*0.2);
-        if (time_on>15) {
-            heat_till=tv.tv_sec+(time_on*60);
-            mode=HEAT;
+        if (tm->tm_hour<7 || tm->tm_hour>=22) {
+            time_on=(factor*(setpoint-S1avg));
+            heat_till=tv.tv_sec+(time_on*60)-2;
+            tm->tm_sec=0; tm->tm_min=0;
+            if (tm->tm_hour<7) {
+                tm->tm_hour=7;
+                sevenAM=mktime(tm);
+            } else {
+                tm->tm_hour=7;
+                tm->tm_mday++;
+                sevenAM=mktime(tm);
+            }
+            if (heat_till>sevenAM) {
+                mode=HEAT;
+            }
+        } else {
+            time_on=(factor*(setpoint-S1avg)*0.2);
+            if (time_on>5) { //5 minutes at least, else too quick
+                heat_till=tv.tv_sec+(time_on*60)-2;
+                mode=HEAT;
+            }
         }
     }
     
-    printf("S1=%2.4f S2=%2.4f S3=%2.4f f=%2.1f time-on=%dmin peak_time=%d peak_temp=%2.4f ST=%02x mode=%d till %s", \
-            S1avg,S2avg,S3avg,factor,time_on,peak_time,peak_temp,stateflg,mode,mode==HEAT?ctime(&heat_till):"\n");
+    printf("S1=%2.4f S2=%2.4f S3=%2.4f f=%2.1f time-on=%dmin peak_time=%2d peak_temp=%2.4f ST=%02x mode=%d till %s", \
+            S1avg,S2avg,S3avg,factor,time_on,peak_time,peak_temp,stateflg,mode,ctime(&heat_till));
 }
 
 float curr_mod=0,pressure=0;
