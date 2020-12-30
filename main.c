@@ -225,17 +225,19 @@ void temp_task(void *argv) {
 #define EVAL   2
 
 int peak_time=0,time_on=0,mode=EVAL,heater1=0;
-float factor=650, prev_setpoint=21.5, peak_temp=0;
-time_t heat_till=0, sevenAM=0;
+float factor=700, prev_setpoint=21.5, peak_temp=0;
+time_t heat_till=0;
 int   stateflg=0,errorflg=0;
 void heater(uint32_t seconds) {
     if (!time_set) return; //need reliable time
+    char str[26];
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    struct tm *tm = localtime(&(tv.tv_sec));
+    time_t now=tv.tv_sec;
+    struct tm *tm = localtime(&now);
     printf("Heater@ %4d DST%d day%d wd%d %02d:%02d:%02d.%06d = %s", \
             (seconds+10)/60,tm->tm_isdst,tm->tm_yday,tm->tm_wday, \
-            tm->tm_hour,tm->tm_min,tm->tm_sec,(int)tv.tv_usec,ctime(&(tv.tv_sec)));
+            tm->tm_hour,tm->tm_min,tm->tm_sec,(int)tv.tv_usec,ctime(&now));
 
     heater1=0;
     float setpoint=tgt_temp1.value.float_value;
@@ -245,7 +247,7 @@ void heater(uint32_t seconds) {
     }
 
     if (mode==HEAT) {
-        if (tv.tv_sec>heat_till) {
+        if (now>heat_till) {
             time_on=0;
             mode=EVAL;
             peak_temp=S1avg;
@@ -258,38 +260,31 @@ void heater(uint32_t seconds) {
         if (peak_temp<S1avg) {
             peak_temp=S1avg;
             peak_time=0;
-        } else if (S1avg<(peak_temp-0.07) || peak_time++>30) {
+        } else if (S1avg<(peak_temp-0.07) || peak_time++>=30) {
             mode=STABLE;
             //adjust factor
             peak_temp=0,peak_time=0;
         }
     } else if (mode==STABLE) {
-        if (tm->tm_hour<7 || tm->tm_hour>=22) {
+        if (tm->tm_hour<7 || tm->tm_hour>=22) { //night time preparing for morning warmup
             time_on=(factor*(setpoint-S1avg));
-            heat_till=tv.tv_sec+(time_on*60)-2;
-            tm->tm_sec=0; tm->tm_min=0;
-            if (tm->tm_hour<7) {
-                tm->tm_hour=7;
-                sevenAM=mktime(tm);
-            } else {
-                tm->tm_hour=7;
-                tm->tm_mday++;
-                sevenAM=mktime(tm);
-            }
-            if (heat_till>sevenAM) {
+            heat_till=now+(time_on*60)-2;         // -2 makes switch off moment more logical
+            if (tm->tm_hour>=22) tm->tm_mday++;         // 7 AM is  tomorrow
+            tm->tm_hour=7; tm->tm_min=0; tm->tm_sec=0;  // 7 AM loaded in tm
+            if (heat_till>mktime(tm)) {
                 mode=HEAT;
             }
-        } else {
-            time_on=(factor*(setpoint-S1avg)*0.2);
-            if (time_on>5) { //5 minutes at least, else too quick
-                heat_till=tv.tv_sec+(time_on*60)-2;
+        } else { //daytime control
+            time_on=(factor*(setpoint-S1avg)*0.3);
+            if (time_on>5) { //5 minutes at least, else too quick but allows fixes of 1/16th degree C
+                heat_till=now+(time_on*60)-2;
                 mode=HEAT;
             }
         }
     }
-    
-    printf("S1=%2.4f S2=%2.4f S3=%2.4f f=%2.1f time-on=%dmin peak_time=%2d peak_temp=%2.4f ST=%02x mode=%d till %s", \
-            S1avg,S2avg,S3avg,factor,time_on,peak_time,peak_temp,stateflg,mode,ctime(&heat_till));
+    ctime_r(&heat_till,str);str[16]=0; str[4]=str[9]=' ';str[5]='t';str[6]='i';str[7]=str[8]='l'; // " till hh:mm"
+    printf("S1=%2.4f S2=%2.4f S3=%2.4f f=%2.1f time-on=%3dmin peak_time=%2d peak_temp=%2.4f ST=%02x mode=%d%s\n", \
+            S1avg,S2avg,S3avg,factor,time_on,peak_time,peak_temp,stateflg,mode,(mode==1)?(str+4):"");
 }
 
 float curr_mod=0,pressure=0;
@@ -314,7 +309,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             send_OT_frame(0x00190000); //25 read boiler water temperature
             break;
         case 1: //execute heater decisions
-            if (tgt_heat2.value.int_value==1) {
+            if (tgt_heat2.value.int_value==1) { //use on/off switching thermostat
                    message=0x10014000; //64 deg
             } else if (tgt_heat2.value.int_value==3) { //run heater algoritm for floor heating
                    message=0x10014100; //65 deg
@@ -322,7 +317,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             send_OT_frame(message); //1  CH setpoint in deg C
             break;
         case 2:
-            if (tgt_heat2.value.int_value==1) {
+            if (tgt_heat2.value.int_value==1) { //use on/off switching thermostat
                    message=0x00000200|(switch_on?0x100:0x000);
             } else if (tgt_heat2.value.int_value==3) { //run heater algoritm for floor heating
                    message=0x00000200|(  heater1?0x100:0x000);
