@@ -202,11 +202,9 @@ void temp_task(void *argv) {
     }
 }
 
-#define STABLE 0
-#define HEAT   1
-#define EVAL   2
 #define RTC_ADDR    0x600013B0
 #define RTC_MAGIC   0xaabecede
+enum    modes { STABLE, HEAT, EVAL };
 int     mode=EVAL,peak_time=15; //after update, evaluate only 15 minutes
 float   peak_temp=0,factor=700,prev_setp=21.5;
 time_t  heat_till=0;
@@ -228,7 +226,29 @@ void heater(uint32_t seconds) {
         if (setpoint>prev_setp) mode=STABLE; else mode=EVAL;
         prev_setp=setpoint;
     }
-
+    if (mode==EVAL) {
+        if (S1avg<(peak_temp-0.07) || peak_time++>=30) {
+            mode=STABLE;
+            //adjust factor
+            peak_temp=0,peak_time=0;
+        } else if (peak_temp<S1avg) {
+            peak_temp=S1avg;
+            peak_time=0;
+        }
+    }
+    if (mode==STABLE) {
+        if (tm->tm_hour<7 || tm->tm_hour>=22) { //night time preparing for morning warmup
+            time_on=(factor*(setpoint-S1avg));
+            heat_till=now+(time_on*60)-2;               // -2 makes switch off moment more logical
+            if (tm->tm_hour>=22) tm->tm_mday++;         // 7 AM is  tomorrow
+            tm->tm_hour=7; tm->tm_min=0; tm->tm_sec=0;  // 7 AM loaded in tm
+            if (heat_till>mktime(tm)) mode=HEAT;
+        } else { //daytime control
+            time_on=(factor*(setpoint-S1avg)*0.3);
+            heat_till=now+(time_on*60)-2;
+            if (time_on>5) mode=HEAT; //5 minutes at least, else too quick and allows fixes of 1/16th degree C
+        }
+    }
     if (mode==HEAT) {
         if (now>heat_till) {
             time_on=0;
@@ -239,32 +259,8 @@ void heater(uint32_t seconds) {
             time_on--;
             heater1=1;
         }
-    } else if (mode==EVAL) {
-        if (peak_temp<S1avg) {
-            peak_temp=S1avg;
-            peak_time=0;
-        } else if (S1avg<(peak_temp-0.07) || peak_time++>=30) {
-            mode=STABLE;
-            //adjust factor
-            peak_temp=0,peak_time=0;
-        }
-    } else if (mode==STABLE) {
-        if (tm->tm_hour<7 || tm->tm_hour>=22) { //night time preparing for morning warmup
-            time_on=(factor*(setpoint-S1avg));
-            heat_till=now+(time_on*60)-2;               // -2 makes switch off moment more logical
-            if (tm->tm_hour>=22) tm->tm_mday++;         // 7 AM is  tomorrow
-            tm->tm_hour=7; tm->tm_min=0; tm->tm_sec=0;  // 7 AM loaded in tm
-            if (heat_till>mktime(tm)) {
-                mode=HEAT;
-            }
-        } else { //daytime control
-            time_on=(factor*(setpoint-S1avg)*0.3);
-            heat_till=now+(time_on*60)-2;
-            if (time_on>5) { //5 minutes at least, else too quick but allows fixes of 1/16th degree C
-                mode=HEAT;
-            }
-        }
     }
+    
     ctime_r(&heat_till,str);str[16]=0; str[5]=str[10]=' ';str[6]='t';str[7]='i';str[8]=str[9]='l'; // " till hh:mm"
     printf("S1=%2.4f S2=%2.4f S3=%2.4f f=%2.1f time-on=%-3d min peak_time=%2d peak_temp=%7.4f ST=%02x mode=%d%s\n", \
             S1avg,S2avg,S3avg,factor,time_on,peak_time,peak_temp,stateflg,mode,(mode==1)?(str+5):"");
@@ -277,8 +273,9 @@ void heater(uint32_t seconds) {
                           WRITE_PERI_REG(RTC_ADDR+24,peak_time); //int
                           WRITE_PERI_REG(RTC_ADDR   ,RTC_MAGIC);
 }
-//#define WRITE_PERI_REG(addr, val) (*((volatile uint32 *)ETS_UNCACHED_ADDR(addr))) = (uint32)(val)
+
 void init_task(void *argv) {
+    vTaskDelay(1000/portTICK_PERIOD_MS);
     printf("RTC: "); for (int i=0;i<7;i++) printf("%08x ",READ_PERI_REG(RTC_ADDR+i*4)); printf("\n");
     uint32_t *dp;
 	if (READ_PERI_REG(RTC_ADDR)==RTC_MAGIC) {
@@ -297,12 +294,12 @@ void init_task(void *argv) {
     sntp_setservername(0, "0.pool.ntp.org");
     sntp_setservername(1, "1.pool.ntp.org");
     sntp_setservername(2, "2.pool.ntp.org");
-    while (sdk_wifi_station_get_connect_status() != STATION_GOT_IP) vTaskDelay(20); //Check if we have an IP every 200ms
+    while (sdk_wifi_station_get_connect_status() != STATION_GOT_IP) vTaskDelay(200/portTICK_PERIOD_MS); //Check if we have an IP every 200ms
     sntp_init();
     time_t ts;
     do {ts = time(NULL);
         if (ts == ((time_t)-1)) printf("ts=-1 ");
-        vTaskDelay(10);
+        vTaskDelay(100/portTICK_PERIOD_MS);
     } while (!(ts>1608567890)); //Mon Dec 21 17:24:50 CET 2020
     printf("TIME SET: %u=%s", (unsigned int) ts, ctime(&ts));
     time_set=1;
