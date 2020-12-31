@@ -26,6 +26,7 @@
 #include "i2s_dma/i2s_dma.h"
 #include "math.h"
 #include <lwip/apps/sntp.h>
+#include <espressif/esp8266/eagle_soc.h>
 
 #ifndef VERSION
  #error You must set VERSION=x.y.z to match github version tag x.y.z
@@ -156,25 +157,6 @@ static void handle_rx(uint8_t interrupted_pin) {
     }
 }
 
-int  time_set=0;
-void time_task(void *argv) {
-    setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1); tzset();
-    sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    sntp_setservername(0, "0.pool.ntp.org");
-    sntp_setservername(1, "1.pool.ntp.org");
-    sntp_setservername(2, "2.pool.ntp.org");
-    while (sdk_wifi_station_get_connect_status() != STATION_GOT_IP) vTaskDelay(20); //Check if we have an IP every 200ms
-    sntp_init();
-    time_t ts;
-    do {ts = time(NULL);
-        if (ts == ((time_t)-1)) printf("ts=-1 ");
-        vTaskDelay(10);
-    } while (!(ts>1608567890)); //Mon Dec 21 17:24:50 CET 2020
-    printf("TIME SET: %u=%s", (unsigned int) ts, ctime(&ts));
-    time_set=1;
-    vTaskDelete(NULL); //check if NTP keeps running without this task
-}
-
 #define TEMP2HK(n)  do {old_t##n=cur_temp##n.value.float_value; \
                         cur_temp##n.value.float_value=isnan(temp[S##n])?S##n##avg:(float)(int)(temp[S##n]*10+0.5)/10; \
                         if (old_t##n!=cur_temp##n.value.float_value) \
@@ -223,11 +205,12 @@ void temp_task(void *argv) {
 #define STABLE 0
 #define HEAT   1
 #define EVAL   2
-
-int peak_time=0,time_on=0,mode=EVAL,heater1=0;
-float factor=700, prev_setpoint=21.5, peak_temp=0;
-time_t heat_till=0;
-int   stateflg=0,errorflg=0;
+#define RTC_ADDR    0x600013B0
+#define RTC_MAGIC   0xaabecede
+int     mode=EVAL,peak_time=15; //after update, evaluate only 15 minutes
+float   peak_temp=0,factor=700,prev_setp=21.5;
+time_t  heat_till=0;
+int     time_set=0,time_on=0,heater1=0,stateflg=0,errorflg=0;
 void heater(uint32_t seconds) {
     if (!time_set) return; //need reliable time
     char str[26];
@@ -235,15 +218,15 @@ void heater(uint32_t seconds) {
     gettimeofday(&tv, NULL);
     time_t now=tv.tv_sec;
     struct tm *tm = localtime(&now);
-    printf("Heater@ %4d DST%d day%d wd%d %02d:%02d:%02d.%06d = %s", \
-            (seconds+10)/60,tm->tm_isdst,tm->tm_yday,tm->tm_wday, \
+    printf("Heater@%-4d DST%d wd%d day%d %02d:%02d:%02d.%06d = %s", \
+            (seconds+10)/60,tm->tm_isdst,tm->tm_wday,tm->tm_yday, \
             tm->tm_hour,tm->tm_min,tm->tm_sec,(int)tv.tv_usec,ctime(&now));
 
     heater1=0;
     float setpoint=tgt_temp1.value.float_value;
-    if (setpoint!=prev_setpoint) {
-        if (setpoint>prev_setpoint) mode=STABLE; else mode=EVAL;
-        prev_setpoint=setpoint;
+    if (setpoint!=prev_setp) {
+        if (setpoint>prev_setp) mode=STABLE; else mode=EVAL;
+        prev_setp=setpoint;
     }
 
     if (mode==HEAT) {
@@ -268,7 +251,7 @@ void heater(uint32_t seconds) {
     } else if (mode==STABLE) {
         if (tm->tm_hour<7 || tm->tm_hour>=22) { //night time preparing for morning warmup
             time_on=(factor*(setpoint-S1avg));
-            heat_till=now+(time_on*60)-2;         // -2 makes switch off moment more logical
+            heat_till=now+(time_on*60)-2;               // -2 makes switch off moment more logical
             if (tm->tm_hour>=22) tm->tm_mday++;         // 7 AM is  tomorrow
             tm->tm_hour=7; tm->tm_min=0; tm->tm_sec=0;  // 7 AM loaded in tm
             if (heat_till>mktime(tm)) {
@@ -276,15 +259,54 @@ void heater(uint32_t seconds) {
             }
         } else { //daytime control
             time_on=(factor*(setpoint-S1avg)*0.3);
+            heat_till=now+(time_on*60)-2;
             if (time_on>5) { //5 minutes at least, else too quick but allows fixes of 1/16th degree C
-                heat_till=now+(time_on*60)-2;
                 mode=HEAT;
             }
         }
     }
-    ctime_r(&heat_till,str);str[16]=0; str[4]=str[9]=' ';str[5]='t';str[6]='i';str[7]=str[8]='l'; // " till hh:mm"
-    printf("S1=%2.4f S2=%2.4f S3=%2.4f f=%2.1f time-on=%3dmin peak_time=%2d peak_temp=%2.4f ST=%02x mode=%d%s\n", \
-            S1avg,S2avg,S3avg,factor,time_on,peak_time,peak_temp,stateflg,mode,(mode==1)?(str+4):"");
+    ctime_r(&heat_till,str);str[16]=0; str[5]=str[10]=' ';str[6]='t';str[7]='i';str[8]=str[9]='l'; // " till hh:mm"
+    printf("S1=%2.4f S2=%2.4f S3=%2.4f f=%2.1f time-on=%-3d min peak_time=%2d peak_temp=%7.4f ST=%02x mode=%d%s\n", \
+            S1avg,S2avg,S3avg,factor,time_on,peak_time,peak_temp,stateflg,mode,(mode==1)?(str+5):"");
+    
+    uint32_t *dp;         WRITE_PERI_REG(RTC_ADDR+ 4,mode     ); //int
+                          WRITE_PERI_REG(RTC_ADDR+ 8,heat_till); //time_t
+    dp=(void*)&factor;    WRITE_PERI_REG(RTC_ADDR+12,*dp      ); //float
+    dp=(void*)&prev_setp; WRITE_PERI_REG(RTC_ADDR+16,*dp      ); //float
+    dp=(void*)&peak_temp; WRITE_PERI_REG(RTC_ADDR+20,*dp      ); //float
+                          WRITE_PERI_REG(RTC_ADDR+24,peak_time); //int
+                          WRITE_PERI_REG(RTC_ADDR   ,RTC_MAGIC);
+}
+//#define WRITE_PERI_REG(addr, val) (*((volatile uint32 *)ETS_UNCACHED_ADDR(addr))) = (uint32)(val)
+void init_task(void *argv) {
+    printf("RTC: "); for (int i=0;i<7;i++) printf("%08x ",READ_PERI_REG(RTC_ADDR+i*4)); printf("\n");
+    uint32_t *dp;
+	if (READ_PERI_REG(RTC_ADDR)==RTC_MAGIC) {
+	    mode                    =READ_PERI_REG(RTC_ADDR+ 4);
+        heat_till               =READ_PERI_REG(RTC_ADDR+ 8);
+        dp=(void*)&factor;   *dp=READ_PERI_REG(RTC_ADDR+12);
+        dp=(void*)&prev_setp;*dp=READ_PERI_REG(RTC_ADDR+16);
+        dp=(void*)&peak_temp;*dp=READ_PERI_REG(RTC_ADDR+20);
+        peak_time               =READ_PERI_REG(RTC_ADDR+24);
+    }
+    printf("INITIAL prev_setp=%2.1f f=%2.1f peak_time=%2d peak_temp=%2.4f mode=%d heat_till %s", \
+            prev_setp,factor,peak_time,peak_temp,mode,ctime(&heat_till));
+    
+    setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1); tzset();
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_setservername(0, "0.pool.ntp.org");
+    sntp_setservername(1, "1.pool.ntp.org");
+    sntp_setservername(2, "2.pool.ntp.org");
+    while (sdk_wifi_station_get_connect_status() != STATION_GOT_IP) vTaskDelay(20); //Check if we have an IP every 200ms
+    sntp_init();
+    time_t ts;
+    do {ts = time(NULL);
+        if (ts == ((time_t)-1)) printf("ts=-1 ");
+        vTaskDelay(10);
+    } while (!(ts>1608567890)); //Mon Dec 21 17:24:50 CET 2020
+    printf("TIME SET: %u=%s", (unsigned int) ts, ctime(&ts));
+    time_set=1;
+    vTaskDelete(NULL);
 }
 
 float curr_mod=0,pressure=0;
@@ -403,7 +425,7 @@ void device_init() {
 
     xQueue = xQueueCreate(1, sizeof(uint32_t));
     xTaskCreate(temp_task,"Temp", 512, NULL, 1, &tempTask);
-    xTaskCreate(time_task,"Time", 512, NULL, 6, NULL);
+    xTaskCreate(init_task,"Time", 512, NULL, 6, NULL);
     xTimer=xTimerCreate( "Timer", 1000/portTICK_PERIOD_MS, pdTRUE, (void*)0, vTimerCallback);
     xTimerStart(xTimer, 0);
 }
