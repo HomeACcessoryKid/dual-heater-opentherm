@@ -72,7 +72,7 @@ homekit_characteristic_t dis_temp1 = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY
 
 homekit_characteristic_t tgt_heat2 = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE,  3 );
 homekit_characteristic_t cur_heat2 = HOMEKIT_CHARACTERISTIC_(CURRENT_HEATING_COOLING_STATE, 0 );
-homekit_characteristic_t tgt_temp2 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         38.0 );
+homekit_characteristic_t tgt_temp2 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         21.0 );
 homekit_characteristic_t cur_temp2 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         2.0 );
 homekit_characteristic_t dis_temp2 = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY_UNITS,     0 );
 
@@ -208,7 +208,8 @@ enum    modes { STABLE, HEAT, EVAL };
 int     mode=EVAL,peak_time=15; //after update, evaluate only 15 minutes
 float   peak_temp=0,factor=700,prev_setp=21.5;
 time_t  heat_till=0;
-int     time_set=0,time_on=0,heater1=0,stateflg=0,errorflg=0;
+int     time_set=0,time_on=0,stateflg=0,errorflg=0;
+int     heat_sp=35,heater1=0,heater2=0,heat_on;
 void heater(uint32_t seconds) {
     if (!time_set) return; //need reliable time
     char str[26];
@@ -220,11 +221,12 @@ void heater(uint32_t seconds) {
             (seconds+10)/60,tm->tm_isdst,tm->tm_wday,tm->tm_yday, \
             tm->tm_hour,tm->tm_min,tm->tm_sec,(int)tv.tv_usec,ctime(&now));
 
+    //heater1 logic
     heater1=0;
-    float setpoint=tgt_temp1.value.float_value;
-    if (setpoint!=prev_setp) {
-        if (setpoint>prev_setp) mode=STABLE; else mode=EVAL;
-        prev_setp=setpoint;
+    float setpoint1=tgt_temp1.value.float_value;
+    if (setpoint1!=prev_setp) {
+        if (setpoint1>prev_setp) mode=STABLE; else mode=EVAL;
+        prev_setp=setpoint1;
     }
     if (mode==EVAL) {
         if (S1avg<(peak_temp-0.07) || peak_time++>=30) {
@@ -238,13 +240,13 @@ void heater(uint32_t seconds) {
     }
     if (mode==STABLE) {
         if (tm->tm_hour<7 || tm->tm_hour>=22) { //night time preparing for morning warmup
-            time_on=(factor*(setpoint-S1avg));
+            time_on=(factor*(setpoint1-S1avg));
             heat_till=now+(time_on*60)-2;               // -2 makes switch off moment more logical
             if (tm->tm_hour>=22) tm->tm_mday++;         // 7 AM is  tomorrow
             tm->tm_hour=7; tm->tm_min=0; tm->tm_sec=0;  // 7 AM loaded in tm
             if (heat_till>mktime(tm)) mode=HEAT;
         } else { //daytime control
-            time_on=(factor*(setpoint-S1avg)*0.3);
+            time_on=(factor*(setpoint1-S1avg)*0.3);
             heat_till=now+(time_on*60)-2;
             if (time_on>5) mode=HEAT; //5 minutes at least, else too quick and allows fixes of 1/16th degree C
         }
@@ -261,10 +263,20 @@ void heater(uint32_t seconds) {
         }
     }
     
+    //heater2 logic
+    heater2=0; heat_sp=35;//request lowest possible output for floor heating while not heating radiators explicitly
+    float setpoint2=tgt_temp2.value.float_value;
+    if (tm->tm_hour>6 && (setpoint2-S2avg>0)) { // daytime logic from 7AM till midnight
+        heat_sp=(int)(35+(setpoint2-S2avg)*16); if (heat_sp>75) heat_sp=75;
+        heater2=1;
+    }
+
+    //final report
     ctime_r(&heat_till,str);str[16]=0; str[5]=str[10]=' ';str[6]='t';str[7]='i';str[8]=str[9]='l'; // " till hh:mm"
     printf("S1=%2.4f S2=%2.4f S3=%2.4f f=%2.1f time-on=%-3d min peak_time=%2d peak_temp=%7.4f ST=%02x mode=%d%s\n", \
             S1avg,S2avg,S3avg,factor,time_on,peak_time,peak_temp,stateflg,mode,(mode==1)?(str+5):"");
     
+    //save state to RTC memory
     uint32_t *dp;         WRITE_PERI_REG(RTC_ADDR+ 4,mode     ); //int
                           WRITE_PERI_REG(RTC_ADDR+ 8,heat_till); //time_t
     dp=(void*)&factor;    WRITE_PERI_REG(RTC_ADDR+12,*dp      ); //float
@@ -331,20 +343,27 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             if (tgt_heat2.value.int_value==1) { //use on/off switching thermostat
                    message=0x10014000; //64 deg
             } else if (tgt_heat2.value.int_value==3) { //run heater algoritm for floor heating
-                   message=0x10014100; //65 deg
+                   message=0x10010000|(uint32_t)heat_sp*256;
             } else message=0x10010000|(uint32_t)(tgt_temp1.value.float_value*2-1)*256; //range from 19 - 75 deg
             send_OT_frame(message); //1  CH setpoint in deg C
             break;
-        case 2:
+        case 2: send_OT_frame( 0x100e6400 ); break; //14 max modulation level 100%
+        case 3:
+            if (tgt_heat1.value.int_value==2) { //Pump Off rule confirmed
+                cur_heat2.value.int_value=1; //confirm we are heating upstairs
+                homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
+                heat_on=1;
+            }
             if (tgt_heat2.value.int_value==1) { //use on/off switching thermostat
                    message=0x00000200|(switch_on?0x100:0x000);
             } else if (tgt_heat2.value.int_value==3) { //run heater algoritm for floor heating
-                   message=0x00000200|(  heater1?0x100:0x000);
+                   message=0x00000200|(  heat_on?0x100:0x000);
             } else message=0x00000200|(tgt_heat1.value.int_value<<8);
             send_OT_frame( message ); //0  enable CH and DHW
             break; 
-        case 3: send_OT_frame( 0x100e6400 ); break; //14 max modulation level 100%
-        case 4: send_OT_frame( 0x00380000 ); break; //56 DHW setpoint write
+        case 4: if (tgt_heat1.value.int_value==2) tgt_heat1.value.int_value=3; //set heater1 mode back to auto and be ready
+                homekit_characteristic_notify(&tgt_heat1,HOMEKIT_UINT8(tgt_heat1.value.int_value)); // for another trigger
+                send_OT_frame( 0x00380000 ); break; //56 DHW setpoint write
         case 5: send_OT_frame( 0x00050000 ); break; //5  app specific fault flags
         case 6: send_OT_frame( 0x00120000 ); break; //18 CH water pressure
         case 7: send_OT_frame( 0x001a0000 ); break; //26 DHW temp
@@ -357,7 +376,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
         printf("RSP:%08x\n",message);
         switch (timeIndex) { //check answers
             case 0: temp[BW]=(float)(message&0x0000ffff)/256; break;
-            case 2:
+            case 3:
                 stateflg=(message&0x0000007f);
                 cur_heat1.value.int_value=stateflg&0xa?1:0;
                 homekit_characteristic_notify(&cur_heat1,HOMEKIT_UINT8(cur_heat1.value.int_value));
@@ -399,7 +418,16 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     }
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
     if (seconds%60==50) { //allow 6 temperature measurments to make sure all info is loaded
-        heater(seconds);
+        heater(seconds); //sets heater1, heater2 and heat_sp and we must set heat_on
+        heat_on=0;
+        cur_heat2.value.int_value=0; //default off
+        if (heater1) {
+            cur_heat2.value.int_value=1; //default heat
+            heat_on=1;
+        } else if (heater2) { //we must inhibit floor heater pump switch and receive confirmation
+            cur_heat2.value.int_value=2; //setting to COOL triggers rule HeatUpstairs
+        }
+        homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
     }
 } //this is a timer that restarts every 1 second
 
