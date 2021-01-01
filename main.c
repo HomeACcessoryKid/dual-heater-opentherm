@@ -105,10 +105,6 @@ void send_OT_frame(int payload) {
     i2s_dma_start(&dma_block); //transmit the dma_buf once
 }
 
-#ifdef DEBUG_RECV
- uint32_t times[1000], oldtime=0;
- int      level[1000], idx=0;
-#endif
 #define  READY 0
 #define  START 1
 #define  RECV  2
@@ -119,9 +115,6 @@ static void handle_rx(uint8_t interrupted_pin) {
     BaseType_t xHigherPriorityTaskWoken=pdFALSE;
     uint32_t now=sdk_system_get_time(),delta=now-before;
     int     even=0, inv_read=gpio_read(OT_RECV_PIN);//note that gpio_read gives the inverted value of the symbol
-#ifdef DEBUG_RECV
-    times[idx]=now; level[idx++]=inv_read;
-#endif
     if (rx_state==READY) {
         if (inv_read) return;
         rx_state=START;
@@ -209,9 +202,9 @@ int     mode=EVAL,peak_time=15; //after update, evaluate only 15 minutes
 float   peak_temp=0,factor=700,prev_setp=21.5;
 time_t  heat_till=0;
 int     time_set=0,time_on=0,stateflg=0,errorflg=0;
-int     heat_sp=35,heater1=0,heater2=0,heat_on;
-void heater(uint32_t seconds) {
-    if (!time_set) return; //need reliable time
+int     heat_sp=35,heat_on;
+int heater(uint32_t seconds) {
+    if (!time_set) return 0; //need reliable time
     char str[26];
     struct timeval tv;
     gettimeofday(&tv, NULL);
@@ -221,8 +214,8 @@ void heater(uint32_t seconds) {
             (seconds+10)/60,tm->tm_isdst,tm->tm_wday,tm->tm_yday, \
             tm->tm_hour,tm->tm_min,tm->tm_sec,(int)tv.tv_usec,ctime(&now));
 
+    int heater1=0,heater2=0,result=0;
     //heater1 logic
-    heater1=0;
     float setpoint1=tgt_temp1.value.float_value;
     if (setpoint1!=prev_setp) {
         if (setpoint1>prev_setp) mode=STABLE; else mode=EVAL;
@@ -242,8 +235,8 @@ void heater(uint32_t seconds) {
         if (tm->tm_hour<7 || tm->tm_hour>=22) { //night time preparing for morning warmup
             time_on=(factor*(setpoint1-S1avg));
             heat_till=now+(time_on*60)-2;               // -2 makes switch off moment more logical
-            if (tm->tm_hour>=22) tm->tm_mday++;         // 7 AM is  tomorrow
-            tm->tm_hour=7; tm->tm_min=0; tm->tm_sec=0;  // 7 AM loaded in tm
+            if (tm->tm_hour>=22) tm->tm_mday++;         // 7:02 AM is tomorrow
+            tm->tm_hour=7; tm->tm_min=2; tm->tm_sec=0;  // 7:02 AM loaded in tm :02 makes transition for heater 2 better
             if (heat_till>mktime(tm)) mode=HEAT;
         } else { //daytime control
             time_on=(factor*(setpoint1-S1avg)*0.3);
@@ -264,12 +257,14 @@ void heater(uint32_t seconds) {
     }
     
     //heater2 logic
-    heater2=0; heat_sp=35;//request lowest possible output for floor heating while not heating radiators explicitly
     float setpoint2=tgt_temp2.value.float_value;
     if (tm->tm_hour>6 && (setpoint2-S2avg>0)) { // daytime logic from 7AM till midnight
         heat_sp=(int)(35+(setpoint2-S2avg)*16); if (heat_sp>75) heat_sp=75;
         heater2=1;
-    }
+    } else heat_sp=35;//request lowest possible output for floor heating while not heating radiators explicitly
+
+    //integrated logic for both heaters
+    result=0; if (heater1) result=1; else if (heater2) result=2; //we must inhibit floor heater pump
 
     //final report
     ctime_r(&heat_till,str);str[16]=0; str[5]=str[10]=' ';str[6]='t';str[7]='i';str[8]=str[9]='l'; // " till hh:mm"
@@ -284,6 +279,7 @@ void heater(uint32_t seconds) {
     dp=(void*)&peak_temp; WRITE_PERI_REG(RTC_ADDR+20,*dp      ); //float
                           WRITE_PERI_REG(RTC_ADDR+24,peak_time); //int
                           WRITE_PERI_REG(RTC_ADDR   ,RTC_MAGIC);
+    return result;
 }
 
 void init_task(void *argv) {
@@ -318,9 +314,14 @@ void init_task(void *argv) {
     vTaskDelete(NULL);
 }
 
+#define CalcAvg(Sx) do {            Sx##temp[5]=Sx##temp[4];Sx##temp[4]=Sx##temp[3]; \
+            Sx##temp[3]=Sx##temp[2];Sx##temp[2]=Sx##temp[1];Sx##temp[1]=Sx##temp[0]; \
+            if ( !isnan(temp[Sx]) && temp[Sx]!=85 )         Sx##temp[0]=temp[Sx];    \
+            Sx##avg=(Sx##temp[0]+Sx##temp[1]+Sx##temp[2]+Sx##temp[3]+Sx##temp[4]+Sx##temp[5])/6.0; \
+        } while(0)
 float curr_mod=0,pressure=0;
 static TaskHandle_t tempTask = NULL;
-int timeIndex=0,switch_state=0;
+int timeIndex=0,switch_state=0,pump_off_time=0;
 TimerHandle_t xTimer;
 void vTimerCallback( TimerHandle_t xTimer ) {
     uint32_t seconds = ( uint32_t ) pvTimerGetTimerID( xTimer );
@@ -333,6 +334,19 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     switch_on=switch_state>>1;
     //TODO read recv pin and if it is a ONE, we have an OpenTherm error state
     printf("St%d Sw%d @%d ",timeIndex,switch_on,seconds);
+    if (timeIndex%5==3) { // allow 3 seconds for two automation rules to succeed and repeat every 5 seconds
+        if (tgt_heat1.value.int_value==2) { //Pump Off rule confirmed
+            cur_heat2.value.int_value= 1;   //confirm we are heating upstairs
+            homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
+            tgt_heat1.value.int_value= 3;   //set heater1 mode back to auto and be ready for another trigger
+            homekit_characteristic_notify(&tgt_heat1,HOMEKIT_UINT8(tgt_heat1.value.int_value)); //TODO: racecondition?
+            heat_on=1;
+            pump_off_time=300; //seconds
+        }
+        if (cur_heat2.value.int_value==2) //send reminder notify
+            homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
+        if (pump_off_time>4) pump_off_time-=5;
+    }
     switch (timeIndex) { //send commands
         case 0: //measure temperature
             xTaskNotifyGive( tempTask ); //temperature measurement start
@@ -349,11 +363,6 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             break;
         case 2: send_OT_frame( 0x100e6400 ); break; //14 max modulation level 100%
         case 3:
-            if (tgt_heat1.value.int_value==2) { //Pump Off rule confirmed
-                cur_heat2.value.int_value=1; //confirm we are heating upstairs
-                homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
-                heat_on=1;
-            }
             if (tgt_heat2.value.int_value==1) { //use on/off switching thermostat
                    message=0x00000200|(switch_on?0x100:0x000);
             } else if (tgt_heat2.value.int_value==3) { //run heater algoritm for floor heating
@@ -361,9 +370,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             } else message=0x00000200|(tgt_heat1.value.int_value<<8);
             send_OT_frame( message ); //0  enable CH and DHW
             break; 
-        case 4: if (tgt_heat1.value.int_value==2) tgt_heat1.value.int_value=3; //set heater1 mode back to auto and be ready
-                homekit_characteristic_notify(&tgt_heat1,HOMEKIT_UINT8(tgt_heat1.value.int_value)); // for another trigger
-                send_OT_frame( 0x00380000 ); break; //56 DHW setpoint write
+        case 4: send_OT_frame( 0x00380000 ); break; //56 DHW setpoint write
         case 5: send_OT_frame( 0x00050000 ); break; //5  app specific fault flags
         case 6: send_OT_frame( 0x00120000 ); break; //18 CH water pressure
         case 7: send_OT_frame( 0x001a0000 ); break; //26 DHW temp
@@ -391,44 +398,26 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     } else {
         printf("!!! NO_RSP: resp_idx=%d rx_state=%d response=%08x\n",resp_idx, rx_state, response);
         resp_idx=0, rx_state=READY, response=0;
-#ifdef DEBUG_RECV
-        for (int i=0;i<idx;i++) {
-            printf("%4d=%d%s", ((times[i]-oldtime)/10)*10, level[i], i%16?" ":"\n");
-            oldtime=times[i];
-        }
-        idx=0; printf("\n");
-    }
-    if (idx>500) {
-        for (int i=0;i<750;i++) times[i]=times[i+250];
-        idx-=250;
-#endif //DEBUG_RECV
     }
     
-    if (!timeIndex) {
-        S1temp[5]=S1temp[4];S1temp[4]=S1temp[3];S1temp[3]=S1temp[2];S1temp[2]=S1temp[1];S1temp[1]=S1temp[0];
-        S2temp[5]=S2temp[4];S2temp[4]=S2temp[3];S2temp[3]=S2temp[2];S2temp[2]=S2temp[1];S2temp[1]=S2temp[0];
-        S3temp[5]=S3temp[4];S3temp[4]=S3temp[3];S3temp[3]=S3temp[2];S3temp[2]=S3temp[1];S3temp[1]=S3temp[0];
-        if(!isnan(temp[S1]))S1temp[0]=temp[S1];if(!isnan(temp[S2]))S2temp[0]=temp[S2];if(!isnan(temp[S3]))S3temp[0]=temp[S3];
-        S1avg=(S1temp[0]+S1temp[1]+S1temp[2]+S1temp[3]+S1temp[4]+S1temp[5])/6.0;
-        S2avg=(S2temp[0]+S2temp[1]+S2temp[2]+S2temp[3]+S2temp[4]+S2temp[5])/6.0;
-        S3avg=(S3temp[0]+S3temp[1]+S3temp[2]+S3temp[3]+S3temp[4]+S3temp[5])/6.0;
-        S4avg=temp[S4]; S5avg=temp[S5];
-        printf("S1=%2.4f S2=%2.4f S3=%2.4f PR=%1.2f DW=%2.4f S4=%2.4f S5=%2.4f ERR=%02x RW=%2.4f BW=%2.4f MOD=%02.0f ST=%02x\n", \
-           temp[S1],temp[S2],temp[S3],pressure,temp[DW],temp[S4],temp[S5],errorflg,temp[RW],temp[BW],curr_mod,stateflg);
-    }
-    timeIndex++; if (timeIndex==BEAT) timeIndex=0;
+    int result=0;
     if (seconds%60==50) { //allow 6 temperature measurments to make sure all info is loaded
-        heater(seconds); //sets heater1, heater2 and heat_sp and we must set heat_on
         heat_on=0;
-        cur_heat2.value.int_value=0; //default off
-        if (heater1) {
-            cur_heat2.value.int_value=1; //default heat
-            heat_on=1;
-        } else if (heater2) { //we must inhibit floor heater pump switch and receive confirmation
-            cur_heat2.value.int_value=2; //setting to COOL triggers rule HeatUpstairs
-        }
+        if ((result=heater(seconds))) { //sets heat_sp and returns heater result
+            if (result==1) {cur_heat2.value.int_value=1; heat_on=1;}
+            else if (pump_off_time>60) heat_on=1; //still time left
+                 else cur_heat2.value.int_value=2; //setting to COOL triggers rule HeatUpstairs
+        } else cur_heat2.value.int_value=0;
         homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
     }
+
+    if (!timeIndex) {
+        CalcAvg(S1); CalcAvg(S2); CalcAvg(S3);
+        S4avg=temp[S4]; S5avg=temp[S5];
+        printf("S1=%2.4f S2=%2.4f S3=%2.4f PR=%1.2f DW=%2.4f S4=%2.4f S5=%2.4f ERR=%02x RW=%2.4f BW=%2.4f ON=%d MOD=%02.0f ST=%02x\n", \
+           temp[S1],temp[S2],temp[S3],pressure,temp[DW],temp[S4],temp[S5],errorflg,temp[RW],temp[BW],heat_on,curr_mod,stateflg);
+    }
+    timeIndex++; if (timeIndex==BEAT) timeIndex=0;
 } //this is a timer that restarts every 1 second
 
 void device_init() {
