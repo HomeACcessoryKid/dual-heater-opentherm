@@ -80,6 +80,28 @@ homekit_characteristic_t cur_temp3 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE
 homekit_characteristic_t cur_temp4 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         4.0 );
 homekit_characteristic_t cur_temp5 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         5.0 );
 
+float ffactor=600;
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_FACTOR HOMEKIT_CUSTOM_UUID("F0000009")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_FACTOR(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_FACTOR, \
+    .description = "HeaterFactor", \
+    .format = homekit_format_uint16, \
+    .min_value=(float[])   {50}, \
+    .max_value=(float[]) {1500}, \
+    .min_step  = (float[]) {50}, \
+    .permissions = homekit_permissions_paired_read \
+                 | homekit_permissions_paired_write, \
+    .value = HOMEKIT_UINT16_(_value), \
+    ##__VA_ARGS__
+    
+void factor_set(homekit_value_t value); 
+homekit_characteristic_t factor=HOMEKIT_CHARACTERISTIC_(CUSTOM_FACTOR, 600, .setter=factor_set);
+void factor_set(homekit_value_t value) {
+    UDPLUS("Factor: %d\n", value.int_value);
+    ffactor=value.int_value;
+    factor.value=value;
+}
+
 // void identify_task(void *_args) {
 //     vTaskDelete(NULL);
 // }
@@ -199,7 +221,7 @@ void temp_task(void *argv) {
 #define RTC_MAGIC   0xaabecede
 enum    modes { STABLE, HEAT, EVAL };
 int     mode=EVAL,peak_time=15; //after update, evaluate only 15 minutes
-float   peak_temp=0,factor=900,prev_setp=21.5;
+float   peak_temp=0,prev_setp=21.5;
 time_t  heat_till=0;
 int     time_set=0,time_on=0,stateflg=0,errorflg=0;
 int     heat_sp=35,heat_on;
@@ -225,7 +247,7 @@ int heater(uint32_t seconds) {
         eval_time=((setpoint1-S1avg)>0) ? 4/(setpoint1-S1avg) : 0 ;
         if (S1avg<(peak_temp-0.07) || peak_time++>=eval_time) {
             mode=STABLE;
-            //adjust factor
+            //adjust ffactor
             peak_temp=0,peak_time=0;
         } else if (peak_temp<S1avg) {
             peak_temp=S1avg;
@@ -234,13 +256,13 @@ int heater(uint32_t seconds) {
     }
     if (mode==STABLE) {
         if (tm->tm_hour<7 || tm->tm_hour>=22) { //night time preparing for morning warmup
-            time_on=(factor*(setpoint1-S1avg));
+            time_on=(ffactor*(setpoint1-S1avg));
             heat_till=now+(time_on*60)-2;               // -2 makes switch off moment more logical
             if (tm->tm_hour>=22) tm->tm_mday++;         // 7:02 AM is tomorrow
             tm->tm_hour=7; tm->tm_min=2; tm->tm_sec=0;  // 7:02 AM loaded in tm :02 makes transition for heater 2 better
             if (heat_till>mktime(tm)) mode=HEAT;
         } else { //daytime control
-            time_on=(factor*(setpoint1-S1avg)*0.3);
+            time_on=(ffactor*(setpoint1-S1avg)*0.3);
             heat_till=now+(time_on*60)-2;
             if (time_on>5) mode=HEAT; //5 minutes at least, else too quick and allows fixes of 1/16th degree C
         }
@@ -269,16 +291,18 @@ int heater(uint32_t seconds) {
 
     //final report
     ctime_r(&heat_till,str);str[16]=0; str[5]=str[10]=' ';str[6]='t';str[7]='i';str[8]=str[9]='l'; // " till hh:mm"
-    printf("S1=%2.4f S2=%2.4f S3=%2.4f f=%2.1f time-on=%-3d min peak_time=%2d peak_temp=%7.4f ST=%02x mode=%d%s\n", \
-            S1avg,S2avg,S3avg,factor,time_on,peak_time,peak_temp,stateflg,mode,(mode==1)?(str+5):"");
+    printf("S1=%2.4f S2=%2.4f S3=%2.4f f=%2.1f time-on=%3d peak_temp=%7.4f peak_time=%2d<%2d ST=%02x mode=%d%s\n", \
+            S1avg,S2avg,S3avg,ffactor,time_on,peak_temp,peak_time,eval_time,stateflg,mode,(mode==1)?(str+5):"");
     
     //save state to RTC memory
     uint32_t *dp;         WRITE_PERI_REG(RTC_ADDR+ 4,mode     ); //int
                           WRITE_PERI_REG(RTC_ADDR+ 8,heat_till); //time_t
-    dp=(void*)&factor;    WRITE_PERI_REG(RTC_ADDR+12,*dp      ); //float
+    dp=(void*)&ffactor;   WRITE_PERI_REG(RTC_ADDR+12,*dp      ); //float
     dp=(void*)&prev_setp; WRITE_PERI_REG(RTC_ADDR+16,*dp      ); //float
     dp=(void*)&peak_temp; WRITE_PERI_REG(RTC_ADDR+20,*dp      ); //float
                           WRITE_PERI_REG(RTC_ADDR+24,peak_time); //int
+    dp=(void*)&tgt_temp1.value.float_value; WRITE_PERI_REG(RTC_ADDR+28,*dp      ); //float
+    dp=(void*)&tgt_temp2.value.float_value; WRITE_PERI_REG(RTC_ADDR+32,*dp      ); //float
                           WRITE_PERI_REG(RTC_ADDR   ,RTC_MAGIC);
     return result;
 }
@@ -290,13 +314,15 @@ void init_task(void *argv) {
 	if (READ_PERI_REG(RTC_ADDR)==RTC_MAGIC) {
 	    mode                    =READ_PERI_REG(RTC_ADDR+ 4);
         heat_till               =READ_PERI_REG(RTC_ADDR+ 8);
-        dp=(void*)&factor;   *dp=READ_PERI_REG(RTC_ADDR+12);
+        dp=(void*)&ffactor;  *dp=READ_PERI_REG(RTC_ADDR+12);
         dp=(void*)&prev_setp;*dp=READ_PERI_REG(RTC_ADDR+16);
         dp=(void*)&peak_temp;*dp=READ_PERI_REG(RTC_ADDR+20);
         peak_time               =READ_PERI_REG(RTC_ADDR+24);
+        dp=(void*)&(tgt_temp1.value.float_value);*dp=READ_PERI_REG(RTC_ADDR+28);
+        dp=(void*)&(tgt_temp2.value.float_value);*dp=READ_PERI_REG(RTC_ADDR+32);
     }
     printf("INITIAL prev_setp=%2.1f f=%2.1f peak_time=%2d peak_temp=%2.4f mode=%d heat_till %s", \
-            prev_setp,factor,peak_time,peak_temp,mode,ctime(&heat_till));
+            prev_setp,ffactor,peak_time,peak_temp,mode,ctime(&heat_till));
     
     setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1); tzset();
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
@@ -341,7 +367,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
             tgt_heat1.value.int_value= 3;   //set heater1 mode back to auto and be ready for another trigger
             homekit_characteristic_notify(&tgt_heat1,HOMEKIT_UINT8(tgt_heat1.value.int_value)); //TODO: racecondition?
-            pump_off_time=300; //seconds
+            pump_off_time=180; //seconds
             heat_on=1;
         }
         if (cur_heat2.value.int_value==2) {//send reminder notify
@@ -406,16 +432,19 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     if (!timeIndex) {
         CalcAvg(S1); CalcAvg(S2); CalcAvg(S3);
         S4avg=temp[S4]; S5avg=temp[S5];
-        printf("S1=%2.4f S2=%2.4f S3=%2.4f PR=%1.2f DW=%2.4f S4=%2.4f S5=%2.4f ERR=%02x RW=%2.4f BW=%2.4f POT=%3d ON=%d MOD=%02.0f ST=%02x\n", \
-           temp[S1],temp[S2],temp[S3],pressure,temp[DW],temp[S4],temp[S5],errorflg,temp[RW],temp[BW],pump_off_time,heat_on,curr_mod,stateflg);
     }
     
     if (seconds%60==50) { //allow 6 temperature measurments to make sure all info is loaded
         heat_on=0;
         cur_heat2.value.int_value=heater(seconds); //sets heat_sp and returns heater result
-        if (pump_off_time>120) cur_heat2.value.int_value=1; //not yet setting to COOL for trigger rule HeatUpstairs
+        if (pump_off_time>60) cur_heat2.value.int_value=1; //not yet setting to COOL for trigger rule HeatUpstairs
         if (cur_heat2.value.int_value==1) heat_on=1;
         homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
+    }
+
+    if (!timeIndex) {
+        printf("S1=%2.4f S2=%2.4f S3=%2.4f PR=%1.2f DW=%2.4f S4=%2.4f S5=%2.4f ERR=%02x RW=%2.4f BW=%2.4f POT=%3d ON=%d MOD=%02.0f ST=%02x\n", \
+           temp[S1],temp[S2],temp[S3],pressure,temp[DW],temp[S4],temp[S5],errorflg,temp[RW],temp[BW],pump_off_time,heat_on,curr_mod,stateflg);
     }
 
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
@@ -477,6 +506,7 @@ homekit_accessory_t *accessories[] = {
                 .characteristics=(homekit_characteristic_t*[]){
                     HOMEKIT_CHARACTERISTIC(NAME, "Heater T-in"),
                     &cur_temp5,
+                    &factor,
                     NULL
                 }),
             NULL
