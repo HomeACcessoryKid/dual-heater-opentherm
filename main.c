@@ -371,6 +371,9 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             heat_on=1;
         }
         if (cur_heat2.value.int_value==2) {//send reminder notify
+            cur_heat2.value.int_value= 0; //to assure it is considered as a new value we first set it to off
+            homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value)); //and notify
+            cur_heat2.value.int_value= 2;
             homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
             if (pump_off_time>10) heat_on=1; //still time left
         }
