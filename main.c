@@ -72,7 +72,7 @@ homekit_characteristic_t dis_temp1 = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY
 
 homekit_characteristic_t tgt_heat2 = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE,  3 );
 homekit_characteristic_t cur_heat2 = HOMEKIT_CHARACTERISTIC_(CURRENT_HEATING_COOLING_STATE, 0 );
-homekit_characteristic_t tgt_temp2 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         21.0 );
+homekit_characteristic_t tgt_temp2 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         20.5 );
 homekit_characteristic_t cur_temp2 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         2.0 );
 homekit_characteristic_t dis_temp2 = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY_UNITS,     0 );
 
@@ -199,7 +199,7 @@ void temp_task(void *argv) {
 #define RTC_MAGIC   0xaabecede
 enum    modes { STABLE, HEAT, EVAL };
 int     mode=EVAL,peak_time=15; //after update, evaluate only 15 minutes
-float   peak_temp=0,factor=700,prev_setp=21.5;
+float   peak_temp=0,factor=900,prev_setp=21.5;
 time_t  heat_till=0;
 int     time_set=0,time_on=0,stateflg=0,errorflg=0;
 int     heat_sp=35,heat_on;
@@ -214,7 +214,7 @@ int heater(uint32_t seconds) {
             (seconds+10)/60,tm->tm_isdst,tm->tm_wday,tm->tm_yday, \
             tm->tm_hour,tm->tm_min,tm->tm_sec,(int)tv.tv_usec,ctime(&now));
 
-    int heater1=0,heater2=0,result=0;
+    int eval_time=0,heater1=0,heater2=0,result=0;
     //heater1 logic
     float setpoint1=tgt_temp1.value.float_value;
     if (setpoint1!=prev_setp) {
@@ -222,7 +222,8 @@ int heater(uint32_t seconds) {
         prev_setp=setpoint1;
     }
     if (mode==EVAL) {
-        if (S1avg<(peak_temp-0.07) || peak_time++>=30) {
+        eval_time=((setpoint1-S1avg)>0) ? 4/(setpoint1-S1avg) : 0 ;
+        if (S1avg<(peak_temp-0.07) || peak_time++>=eval_time) {
             mode=STABLE;
             //adjust factor
             peak_temp=0,peak_time=0;
@@ -334,18 +335,20 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     switch_on=switch_state>>1;
     //TODO read recv pin and if it is a ONE, we have an OpenTherm error state
     printf("St%d Sw%d @%d ",timeIndex,switch_on,seconds);
-    if (timeIndex%5==3) { // allow 3 seconds for two automation rules to succeed and repeat every 5 seconds
+    if (timeIndex==3) { // allow 3 seconds for two automation rules to succeed and repeat every 10 seconds
         if (tgt_heat1.value.int_value==2) { //Pump Off rule confirmed
             cur_heat2.value.int_value= 1;   //confirm we are heating upstairs
             homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
             tgt_heat1.value.int_value= 3;   //set heater1 mode back to auto and be ready for another trigger
             homekit_characteristic_notify(&tgt_heat1,HOMEKIT_UINT8(tgt_heat1.value.int_value)); //TODO: racecondition?
-            heat_on=1;
             pump_off_time=300; //seconds
+            heat_on=1;
         }
-        if (cur_heat2.value.int_value==2) //send reminder notify
+        if (cur_heat2.value.int_value==2) {//send reminder notify
             homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
-        if (pump_off_time>4) pump_off_time-=5;
+            if (pump_off_time>10) heat_on=1; //still time left
+        }
+        if (pump_off_time) pump_off_time-=10;
     }
     switch (timeIndex) { //send commands
         case 0: //measure temperature
@@ -400,22 +403,19 @@ void vTimerCallback( TimerHandle_t xTimer ) {
         resp_idx=0, rx_state=READY, response=0;
     }
     
-    int result=0;
     if (seconds%60==50) { //allow 6 temperature measurments to make sure all info is loaded
         heat_on=0;
-        if ((result=heater(seconds))) { //sets heat_sp and returns heater result
-            if (result==1) {cur_heat2.value.int_value=1; heat_on=1;}
-            else if (pump_off_time>60) heat_on=1; //still time left
-                 else cur_heat2.value.int_value=2; //setting to COOL triggers rule HeatUpstairs
-        } else cur_heat2.value.int_value=0;
+        cur_heat2.value.int_value=heater(seconds); //sets heat_sp and returns heater result
+        if (pump_off_time>120) cur_heat2.value.int_value=1; //not yet setting to COOL for trigger rule HeatUpstairs
+        if (cur_heat2.value.int_value==1) heat_on=1;
         homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
     }
 
     if (!timeIndex) {
         CalcAvg(S1); CalcAvg(S2); CalcAvg(S3);
         S4avg=temp[S4]; S5avg=temp[S5];
-        printf("S1=%2.4f S2=%2.4f S3=%2.4f PR=%1.2f DW=%2.4f S4=%2.4f S5=%2.4f ERR=%02x RW=%2.4f BW=%2.4f ON=%d MOD=%02.0f ST=%02x\n", \
-           temp[S1],temp[S2],temp[S3],pressure,temp[DW],temp[S4],temp[S5],errorflg,temp[RW],temp[BW],heat_on,curr_mod,stateflg);
+        printf("S1=%2.4f S2=%2.4f S3=%2.4f PR=%1.2f DW=%2.4f S4=%2.4f S5=%2.4f ERR=%02x RW=%2.4f BW=%2.4f POT=%3d ON=%d MOD=%02.0f ST=%02x\n", \
+           temp[S1],temp[S2],temp[S3],pressure,temp[DW],temp[S4],temp[S5],errorflg,temp[RW],temp[BW],pump_off_time,heat_on,curr_mod,stateflg);
     }
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
 } //this is a timer that restarts every 1 second
