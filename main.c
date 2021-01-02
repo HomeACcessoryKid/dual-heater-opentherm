@@ -403,6 +403,13 @@ void vTimerCallback( TimerHandle_t xTimer ) {
         resp_idx=0, rx_state=READY, response=0;
     }
     
+    if (!timeIndex) {
+        CalcAvg(S1); CalcAvg(S2); CalcAvg(S3);
+        S4avg=temp[S4]; S5avg=temp[S5];
+        printf("S1=%2.4f S2=%2.4f S3=%2.4f PR=%1.2f DW=%2.4f S4=%2.4f S5=%2.4f ERR=%02x RW=%2.4f BW=%2.4f POT=%3d ON=%d MOD=%02.0f ST=%02x\n", \
+           temp[S1],temp[S2],temp[S3],pressure,temp[DW],temp[S4],temp[S5],errorflg,temp[RW],temp[BW],pump_off_time,heat_on,curr_mod,stateflg);
+    }
+    
     if (seconds%60==50) { //allow 6 temperature measurments to make sure all info is loaded
         heat_on=0;
         cur_heat2.value.int_value=heater(seconds); //sets heat_sp and returns heater result
@@ -411,12 +418,6 @@ void vTimerCallback( TimerHandle_t xTimer ) {
         homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
     }
 
-    if (!timeIndex) {
-        CalcAvg(S1); CalcAvg(S2); CalcAvg(S3);
-        S4avg=temp[S4]; S5avg=temp[S5];
-        printf("S1=%2.4f S2=%2.4f S3=%2.4f PR=%1.2f DW=%2.4f S4=%2.4f S5=%2.4f ERR=%02x RW=%2.4f BW=%2.4f POT=%3d ON=%d MOD=%02.0f ST=%02x\n", \
-           temp[S1],temp[S2],temp[S3],pressure,temp[DW],temp[S4],temp[S5],errorflg,temp[RW],temp[BW],pump_off_time,heat_on,curr_mod,stateflg);
-    }
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
 } //this is a timer that restarts every 1 second
 
