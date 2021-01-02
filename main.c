@@ -348,7 +348,7 @@ void init_task(void *argv) {
         } while(0)
 float curr_mod=0,pressure=0;
 static TaskHandle_t tempTask = NULL;
-int timeIndex=0,switch_state=0,pump_off_time=0;
+int timeIndex=0,switch_state=0,pump_off_time=0,retrigger=0;
 TimerHandle_t xTimer;
 void vTimerCallback( TimerHandle_t xTimer ) {
     uint32_t seconds = ( uint32_t ) pvTimerGetTimerID( xTimer );
@@ -373,11 +373,14 @@ void vTimerCallback( TimerHandle_t xTimer ) {
         if (cur_heat2.value.int_value==2) {//send reminder notify
             cur_heat2.value.int_value= 0; //to assure it is considered as a new value we first set it to off
             homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value)); //and notify
-            cur_heat2.value.int_value= 2;
-            homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
+            retrigger=1;
             if (pump_off_time>10) heat_on=1; //still time left
         }
         if (pump_off_time) pump_off_time-=10;
+    }
+    if (retrigger && timeIndex==8) { retrigger=0; //retrigger needed 5 seconds offset
+        cur_heat2.value.int_value= 2;
+        homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
     }
     switch (timeIndex) { //send commands
         case 0: //measure temperature
