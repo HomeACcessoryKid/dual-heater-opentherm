@@ -270,15 +270,17 @@ int heater(uint32_t seconds) {
             mode=EVAL;
             peak_temp=S1avg;
             peak_time=0;
-        } else {
+        } else if ( setpoint1-S1avg>0 ){
             time_on--;
             heater1=1;
+        } else {
+            mode=STABLE;
         }
     }
     
     //heater2 logic
     float setpoint2=tgt_temp2.value.float_value;
-    if (tm->tm_hour>6 && (tm->tm_min%20)<10 && (setpoint2-S2avg>0)) { // daytime logic from 7AM till midnight
+    if (tm->tm_hour>6 && (setpoint2-S2avg>0)) { // daytime logic from 7AM till midnight
         heat_sp=(int)(35+(setpoint2-S2avg)*16); if (heat_sp>75) heat_sp=75;
         heater2=1;
     } else heat_sp=35;//request lowest possible output for floor heating while not heating radiators explicitly
@@ -442,8 +444,8 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     
     if (seconds%60==50) { //allow 6 temperature measurments to make sure all info is loaded
         heat_on=0;
-        cur_heat2.value.int_value=heater(seconds); //sets heat_sp and returns heater result
-        if (pump_off_time>90) cur_heat2.value.int_value=1; //not yet setting to COOL for trigger rule HeatUpstairs
+        cur_heat2.value.int_value=heater(seconds); //sets heat_sp and returns heater result, 0, 1 or 2
+        if (cur_heat2.value.int_value==2 && pump_off_time>90) cur_heat2.value.int_value=1; //do not retrigger rules yet
         if (cur_heat2.value.int_value==1) heat_on=1;
         homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
     }
