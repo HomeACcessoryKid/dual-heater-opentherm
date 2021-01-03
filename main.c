@@ -278,7 +278,7 @@ int heater(uint32_t seconds) {
     
     //heater2 logic
     float setpoint2=tgt_temp2.value.float_value;
-    if (tm->tm_hour>6 && tm->tm_min>30 && (setpoint2-S2avg>0)) { // daytime logic from 7AM till midnight
+    if (tm->tm_hour>6 && (tm->tm_min%20)<10 && (setpoint2-S2avg>0)) { // daytime logic from 7AM till midnight
         heat_sp=(int)(35+(setpoint2-S2avg)*16); if (heat_sp>75) heat_sp=75;
         heater2=1;
     } else heat_sp=35;//request lowest possible output for floor heating while not heating radiators explicitly
@@ -290,7 +290,7 @@ int heater(uint32_t seconds) {
     ctime_r(&heat_till,str);str[16]=0; str[5]=str[10]=' ';str[6]='t';str[7]='i';str[8]=str[9]='l'; // " till hh:mm"
     printf("S1=%2.4f S2=%2.4f S3=%2.4f f=%2.1f time-on=%3d peak_temp=%7.4f peak_time=%2d<%2d ST=%02x mode=%d%s\n", \
             S1avg,S2avg,S3avg,ffactor,time_on,peak_temp,peak_time,eval_time,stateflg,mode,(mode==1)?(str+5):"");
-    printf("Heater@%-4d DST%dwd%dyd%-3d %2d|%02d:%02d:%02d.%06d => heater_sp%2d h1:%d + h2:%d = on:%d\n", \
+    printf("Heater@%-4d                             DST%dwd%dyd%-3d %2d|%02d:%02d:%02d.%06d => heater_sp:%2d h1:%d + h2:%d = on:%d\n", \
             (seconds+10)/60,tm->tm_isdst,tm->tm_wday,tm->tm_yday,tm->tm_mday, \
             tm->tm_hour,tm->tm_min,tm->tm_sec,(int)tv.tv_usec,heat_sp,heater1,heater2,result);
     
@@ -362,6 +362,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     //TODO read recv pin and if it is a ONE, we have an OpenTherm error state
     printf("St%d Sw%d @%d ",timeIndex,switch_on,seconds);
     if (timeIndex==3) { // allow 3 seconds for two automation rules to succeed and repeat every 10 seconds
+        if (pump_off_time) pump_off_time-=10;
         if (tgt_heat1.value.int_value==2) { //Pump Off rule confirmed
             cur_heat2.value.int_value= 1;   //confirm we are heating upstairs
             homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
@@ -376,7 +377,6 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             retrigger=1;
             if (pump_off_time>10) heat_on=1; //still time left
         }
-        if (pump_off_time) pump_off_time-=10;
     }
     if (retrigger && timeIndex==8) { retrigger=0; //retrigger needed 5 seconds offset
         cur_heat2.value.int_value= 2;
@@ -443,7 +443,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     if (seconds%60==50) { //allow 6 temperature measurments to make sure all info is loaded
         heat_on=0;
         cur_heat2.value.int_value=heater(seconds); //sets heat_sp and returns heater result
-        if (pump_off_time>60) cur_heat2.value.int_value=1; //not yet setting to COOL for trigger rule HeatUpstairs
+        if (pump_off_time>90) cur_heat2.value.int_value=1; //not yet setting to COOL for trigger rule HeatUpstairs
         if (cur_heat2.value.int_value==1) heat_on=1;
         homekit_characteristic_notify(&cur_heat2,HOMEKIT_UINT8(cur_heat2.value.int_value));
     }
