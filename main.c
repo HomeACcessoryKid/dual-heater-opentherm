@@ -278,7 +278,7 @@ int heater(uint32_t seconds) {
     
     //heater2 logic
     float setpoint2=tgt_temp2.value.float_value;
-    if (tm->tm_hour>15 && (setpoint2-S2avg>0)) { // daytime logic from 7AM till midnight
+    if (tm->tm_hour>6 && tm->tm_min>30 && (setpoint2-S2avg>0)) { // daytime logic from 7AM till midnight
         heat_sp=(int)(35+(setpoint2-S2avg)*16); if (heat_sp>75) heat_sp=75;
         heater2=1;
     } else heat_sp=35;//request lowest possible output for floor heating while not heating radiators explicitly
@@ -290,7 +290,7 @@ int heater(uint32_t seconds) {
     ctime_r(&heat_till,str);str[16]=0; str[5]=str[10]=' ';str[6]='t';str[7]='i';str[8]=str[9]='l'; // " till hh:mm"
     printf("S1=%2.4f S2=%2.4f S3=%2.4f f=%2.1f time-on=%3d peak_temp=%7.4f peak_time=%2d<%2d ST=%02x mode=%d%s\n", \
             S1avg,S2avg,S3avg,ffactor,time_on,peak_temp,peak_time,eval_time,stateflg,mode,(mode==1)?(str+5):"");
-    printf("Heater@%-4d DST%d wd%d yday%d %2d|%02d:%02d:%02d.%06d => heater_sp%2d h1:%d+h2:%d=on:%d", \
+    printf("Heater@%-4d DST%dwd%dyd%-3d %2d|%02d:%02d:%02d.%06d => heater_sp%2d h1:%d + h2:%d = on:%d\n", \
             (seconds+10)/60,tm->tm_isdst,tm->tm_wday,tm->tm_yday,tm->tm_mday, \
             tm->tm_hour,tm->tm_min,tm->tm_sec,(int)tv.tv_usec,heat_sp,heater1,heater2,result);
     
@@ -314,7 +314,7 @@ void init_task(void *argv) {
 	if (READ_PERI_REG(RTC_ADDR)==RTC_MAGIC) {
 	    mode                    =READ_PERI_REG(RTC_ADDR+ 4);
         heat_till               =READ_PERI_REG(RTC_ADDR+ 8);
-        dp=(void*)&ffactor;  *dp=READ_PERI_REG(RTC_ADDR+12);
+        dp=(void*)&ffactor;  *dp=READ_PERI_REG(RTC_ADDR+12); factor.value.int_value=ffactor;
         dp=(void*)&prev_setp;*dp=READ_PERI_REG(RTC_ADDR+16);
         dp=(void*)&peak_temp;*dp=READ_PERI_REG(RTC_ADDR+20);
         peak_time               =READ_PERI_REG(RTC_ADDR+24);
