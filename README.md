@@ -2,7 +2,7 @@
 ### (c) HomeAccessoryKid 2020-2021
 ## TLDR
 This repo is specific to my house, but you will find a reliable OpenTherm routine synchronized with DS18B20 temperature sensors
-and some whaky ideas how to heat a house like mine.
+and some whacky ideas how to heat a house like mine.
 
 ## My House and the heating strategy
 I live in a well isolated house with a stone bottom floor with floor heating. The top floor uses radiators in the rooms.
@@ -38,3 +38,14 @@ The `current` values are set back to allow a new trigger  to be detected.
 
 ## The gory details
 later... for now see the code
+
+
+## Version history
+
+- 0.6.1 re-issue of the 0.6.0 code to load fixed binary  
+somehow the binary was compiled before the fix was saved (?)
+- 0.6.0 finally fixed the issue of heater2 on in the night  
+because tm was abused, subsequent logic failed  
+present heater on but pump off as cur_heat1=2 COOL  
+initial README
+- 0.5.11 and before development cycle
