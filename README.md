@@ -42,6 +42,9 @@ later... for now see the code
 
 ## Version history
 
+- 0.6.2 weird stuff with the localtime function
+looks like it is a reference to the same object tm as before...
+probably 0.6.0 was OK after all except for this code issue
 - 0.6.1 re-issue of the 0.6.0 code to load fixed binary  
 somehow the binary was compiled before the fix was saved (?)
 - 0.6.0 finally fixed the issue of heater2 on in the night  

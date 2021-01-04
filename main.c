@@ -232,7 +232,7 @@ int heater(uint32_t seconds) {
     char str[26];
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    time_t now=tv.tv_sec;
+    time_t now=tv.tv_sec,now2=now;
     struct tm *tm = localtime(&now);
 
     int eval_time=0,heater1=0,heater2=0;
@@ -257,7 +257,7 @@ int heater(uint32_t seconds) {
         if (tm->tm_hour<7 || tm->tm_hour>=22) { //night time preparing for morning warmup
             time_on=(ffactor*(setpoint1-S1avg));
             heat_till=now+(time_on*60)-2;               // -2 makes switch off moment more logical
-            struct tm *seven02 = localtime(&now);
+            struct tm *seven02 = localtime(&now2);
             if (tm->tm_hour>=22) seven02->tm_mday++;                  // 7:02 AM is tomorrow
             seven02->tm_hour=7; seven02->tm_min=2; seven02->tm_sec=0; //  :02 makes transition for heater 2 better
             if (heat_till>mktime(seven02)) mode=HEAT;
