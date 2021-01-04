@@ -1,8 +1,10 @@
-/*  (c) 2020 HomeAccessoryKid
+/*  (c) 2020-2021 HomeAccessoryKid
  *  This is a dual heater concept. It is specific to my house so I do not try to make it very generic...
  *  It uses any ESP8266 with as little as 1MB flash. 
- *  GPIO-0 reads a button for manual instructions
  *  GPIO-2 is used as a bus with one-wire DS18B20 sensors to measure various temperatures
+ *  GPIO-3 is used for I2S to generate the Opentherm Manchester code bit pattern
+ *  GPIO-4 is used for interupt driven decoding of Manchester code from heater
+ *  GPIO-0 is reading the conventional thermostat on/off value
  *  UDPlogger is used to have remote logging
  *  LCM is enabled in case you want remote updates
  */
@@ -255,9 +257,10 @@ int heater(uint32_t seconds) {
         if (tm->tm_hour<7 || tm->tm_hour>=22) { //night time preparing for morning warmup
             time_on=(ffactor*(setpoint1-S1avg));
             heat_till=now+(time_on*60)-2;               // -2 makes switch off moment more logical
-            if (tm->tm_hour>=22) tm->tm_mday++;         // 7:02 AM is tomorrow
-            tm->tm_hour=7; tm->tm_min=2; tm->tm_sec=0;  // 7:02 AM loaded in tm :02 makes transition for heater 2 better
-            if (heat_till>mktime(tm)) mode=HEAT;
+            struct tm *seven02 = localtime(&now);
+            if (tm->tm_hour>=22) seven02->tm_mday++;                  // 7:02 AM is tomorrow
+            seven02->tm_hour=7; seven02->tm_min=2; seven02->tm_sec=0; //  :02 makes transition for heater 2 better
+            if (heat_till>mktime(seven02)) mode=HEAT;
         } else { //daytime control
             time_on=(ffactor*(setpoint1-S1avg)*0.3);
             heat_till=now+(time_on*60)-2;
@@ -422,7 +425,9 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             case 0: temp[BW]=(float)(message&0x0000ffff)/256; break;
             case 3:
                 stateflg=(message&0x0000007f);
-                cur_heat1.value.int_value=stateflg&0xa?1:0;
+                if (stateflg&0xa) {
+                    cur_heat1.value.int_value=pump_off_time?2:1; //present heater on but pump off as cur_heat1=2 COOL
+                } else cur_heat1.value.int_value=0;
                 homekit_characteristic_notify(&cur_heat1,HOMEKIT_UINT8(cur_heat1.value.int_value));
                 break;
             case 5: errorflg=       (message&0x00003f00)/256; break;
