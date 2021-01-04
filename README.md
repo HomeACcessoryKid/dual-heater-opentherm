@@ -42,6 +42,8 @@ later... for now see the code
 
 ## Version history
 
+- 0.6.3 some bizar leaking of values between tm and seven02
+moving heater2 logic before heater1 and capture timestamp string before setting seven02
 - 0.6.2 weird stuff with the localtime function
 looks like it is a reference to the same object tm as before...
 probably 0.6.0 was OK after all except for this code issue

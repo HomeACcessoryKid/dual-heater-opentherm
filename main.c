@@ -229,13 +229,22 @@ int     time_set=0,time_on=0,stateflg=0,errorflg=0;
 int     heat_sp=35,heat_on;
 int heater(uint32_t seconds) {
     if (!time_set) return 0; //need reliable time
-    char str[26];
+    char str[26], strtm[32]; // e.g. DST0wd2yd4    5|07:02:00.060303
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    time_t now=tv.tv_sec,now2=now;
+    time_t now=tv.tv_sec;
     struct tm *tm = localtime(&now);
 
     int eval_time=0,heater1=0,heater2=0;
+    sprintf(strtm,"DST%dwd%dyd%-3d %2d|%02d:%02d:%02d.%06d",tm->tm_isdst,tm->tm_wday,tm->tm_yday,tm->tm_mday, \
+            tm->tm_hour,tm->tm_min,tm->tm_sec,(int)tv.tv_usec);
+    //heater2 logic
+    float setpoint2=tgt_temp2.value.float_value;
+    if (tm->tm_hour>6 && (setpoint2-S2avg>0)) { // daytime logic from 7AM till midnight
+        heat_sp=(int)(35+(setpoint2-S2avg)*16); if (heat_sp>75) heat_sp=75;
+        heater2=1;
+    } else heat_sp=35;//request lowest possible output for floor heating while not heating radiators explicitly
+
     //heater1 logic
     float setpoint1=tgt_temp1.value.float_value;
     if (setpoint1!=prev_setp) {
@@ -257,7 +266,7 @@ int heater(uint32_t seconds) {
         if (tm->tm_hour<7 || tm->tm_hour>=22) { //night time preparing for morning warmup
             time_on=(ffactor*(setpoint1-S1avg));
             heat_till=now+(time_on*60)-2;               // -2 makes switch off moment more logical
-            struct tm *seven02 = localtime(&now2);
+            struct tm *seven02 = localtime(&now);       // some bizar leaking of values between tm and seven02
             if (tm->tm_hour>=22) seven02->tm_mday++;                  // 7:02 AM is tomorrow
             seven02->tm_hour=7; seven02->tm_min=2; seven02->tm_sec=0; //  :02 makes transition for heater 2 better
             if (heat_till>mktime(seven02)) mode=HEAT;
@@ -281,13 +290,6 @@ int heater(uint32_t seconds) {
         }
     }
     
-    //heater2 logic
-    float setpoint2=tgt_temp2.value.float_value;
-    if (tm->tm_hour>6 && (setpoint2-S2avg>0)) { // daytime logic from 7AM till midnight
-        heat_sp=(int)(35+(setpoint2-S2avg)*16); if (heat_sp>75) heat_sp=75;
-        heater2=1;
-    } else heat_sp=35;//request lowest possible output for floor heating while not heating radiators explicitly
-
     //integrated logic for both heaters
     int result=0; if (heater1) result=1; else if (heater2) result=2; //we must inhibit floor heater pump
 
@@ -295,9 +297,8 @@ int heater(uint32_t seconds) {
     ctime_r(&heat_till,str);str[16]=0; str[5]=str[10]=' ';str[6]='t';str[7]='i';str[8]=str[9]='l'; // " till hh:mm"
     printf("S1=%2.4f S2=%2.4f S3=%2.4f f=%2.1f time-on=%3d peak_temp=%7.4f peak_time=%2d<%2d ST=%02x mode=%d%s\n", \
             S1avg,S2avg,S3avg,ffactor,time_on,peak_temp,peak_time,eval_time,stateflg,mode,(mode==1)?(str+5):"");
-    printf("Heater@%-4d                             DST%dwd%dyd%-3d %2d|%02d:%02d:%02d.%06d => heater_sp:%2d h1:%d + h2:%d = on:%d\n", \
-            (seconds+10)/60,tm->tm_isdst,tm->tm_wday,tm->tm_yday,tm->tm_mday, \
-            tm->tm_hour,tm->tm_min,tm->tm_sec,(int)tv.tv_usec,heat_sp,heater1,heater2,result);
+    printf("Heater@%-4d                     %s => heater_sp:%2d h1:%d + h2:%d = on:%d\n", \
+            (seconds+10)/60,strtm,heat_sp,heater1,heater2,result);
     
     //save state to RTC memory
     uint32_t *dp;         WRITE_PERI_REG(RTC_ADDR+ 4,mode     ); //int
