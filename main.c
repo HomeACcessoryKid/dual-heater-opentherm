@@ -252,7 +252,7 @@ int heater(uint32_t seconds) {
         prev_setp=setpoint1;
     }
     if (mode==EVAL) {
-        eval_time=((setpoint1-S1avg)>0) ? 4/(setpoint1-S1avg) : 0 ;
+        eval_time=((setpoint1-peak_temp)>0.06) ? 4/(setpoint1-peak_temp) : 64 ; //max eval time will be 64 minutes
         if (S1avg<(peak_temp-0.07) || peak_time++>=eval_time) {
             mode=STABLE;
             //adjust ffactor
@@ -295,7 +295,8 @@ int heater(uint32_t seconds) {
 
     //final report
     ctime_r(&heat_till,str);str[16]=0; str[5]=str[10]=' ';str[6]='t';str[7]='i';str[8]=str[9]='l'; // " till hh:mm"
-    printf("S1=%2.4f S2=%2.4f S3=%2.4f f=%2.1f time-on=%3d peak_temp=%7.4f peak_time=%2d<%2d ST=%02x mode=%d%s\n", \
+    if (time_on<0) time_on=0;
+    printf("S1=%7.4f S2=%7.4f S3=%7.4f f=%6.1f time-on=%3d peak_temp=%7.4f peak_time=%2d<%2d ST=%02x mode=%d%s\n", \
             S1avg,S2avg,S3avg,ffactor,time_on,peak_temp,peak_time,eval_time,stateflg,mode,(mode==1)?(str+5):"");
     printf("Heater@%-4d                     %s => heater_sp:%2d h1:%d + h2:%d = on:%d\n", \
             (seconds+10)/60,strtm,heat_sp,heater1,heater2,result);
@@ -411,7 +412,14 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             } else message=0x00000200|(tgt_heat1.value.int_value<<8);
             send_OT_frame( message ); //0  enable CH and DHW
             break; 
-        case 4: send_OT_frame( 0x00380000 ); break; //56 DHW setpoint write
+        case 4:
+            if (seconds%60== 4) send_OT_frame( 0x000a0000 );
+            if (seconds%60==14) send_OT_frame( 0x000b0000 );
+            if (seconds%60==24) send_OT_frame( 0x000b0100 );
+            if (seconds%60==34) send_OT_frame( 0x000b0200 );
+            if (seconds%60==44) send_OT_frame( 0x000f0000 );
+            if (seconds%60==54) send_OT_frame( 0x00210000 );
+            break;
         case 5: send_OT_frame( 0x00050000 ); break; //5  app specific fault flags
         case 6: send_OT_frame( 0x00120000 ); break; //18 CH water pressure
         case 7: send_OT_frame( 0x001a0000 ); break; //26 DHW temp
@@ -457,7 +465,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     }
 
     if (timeIndex==3) {
-        printf("S1=%2.4f S2=%2.4f S3=%2.4f PR=%1.2f DW=%2.4f S4=%2.4f S5=%2.4f ERR=%02x RW=%2.4f BW=%2.4f POT=%3d ON=%d MOD=%02.0f ST=%02x\n", \
+        printf("S1=%7.4f S2=%7.4f S3=%7.4f PR=%4.2f DW=%4.1f S4=%4.1f S5=%4.1f ERR=%02x RW=%4.1f BW=%4.1f POT=%3d ON=%d MOD=%02.0f ST=%02x\n", \
            temp[S1],temp[S2],temp[S3],pressure,temp[DW],temp[S4],temp[S5],errorflg,temp[RW],temp[BW],pump_off_time,heat_on,curr_mod,stateflg);
     }
 
