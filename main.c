@@ -397,13 +397,19 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             break;
         case 1: //execute heater decisions
             if (tgt_heat2.value.int_value==1) { //use on/off switching thermostat
-                   message=0x10014000; //64 deg
+                   message=0x10014b00; //75 deg
             } else if (tgt_heat2.value.int_value==3) { //run heater algoritm for floor heating
                    message=0x10010000|(uint32_t)heat_sp*256;
             } else message=0x10010000|(uint32_t)(tgt_temp1.value.float_value*2-1)*256; //range from 19 - 75 deg
             send_OT_frame(message); //1  CH setpoint in deg C
             break;
-        case 2: send_OT_frame( 0x100e6400 ); break; //14 max modulation level 100%
+        case 2:
+            if (tgt_heat2.value.int_value==1) { //use on/off switching thermostat
+                if (tgt_temp2.value.float_value>17) message=0x100e0000|(uint32_t)(4*tgt_temp2.value.float_value-52)*256; //18-100%
+                else message=0x100e1100; //17%
+            } else   message=0x100e6400; //100%
+            send_OT_frame( message ); //14 max modulation level
+            break;
         case 3:
             if (tgt_heat2.value.int_value==1) { //use on/off switching thermostat
                    message=0x00000200|(switch_on?0x100:0x000);
@@ -413,12 +419,9 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             send_OT_frame( message ); //0  enable CH and DHW
             break; 
         case 4:
-            if (seconds%60== 4) send_OT_frame( 0x000a0000 );
-            if (seconds%60==14) send_OT_frame( 0x000b0000 );
-            if (seconds%60==24) send_OT_frame( 0x000b0100 );
-            if (seconds%60==34) send_OT_frame( 0x000b0200 );
-            if (seconds%60==44) send_OT_frame( 0x000f0000 );
-            if (seconds%60==54) send_OT_frame( 0x00210000 );
+            if (tgt_heat2.value.int_value==2) { //test BLOR
+                   send_OT_frame( 0x10040200 ); //4  BoilerLockOutReset
+            } else send_OT_frame( 0x00380000 ); //56 DHW setpoint write
             break;
         case 5: send_OT_frame( 0x00050000 ); break; //5  app specific fault flags
         case 6: send_OT_frame( 0x00120000 ); break; //18 CH water pressure
