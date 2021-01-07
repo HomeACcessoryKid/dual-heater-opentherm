@@ -42,6 +42,8 @@ later... for now see the code
 
 ## Version history
 
+- 0.6.6 prevent incorrect temperature readings
+and fix BLOR encoding error
 - 0.6.5 OT command testing for BLOR and Boiler Sequencer Control
 max modulation is controlled by tgt_temp2
 - 0.6.4 evaltime calculation and testing OT command support

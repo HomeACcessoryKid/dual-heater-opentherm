@@ -189,7 +189,7 @@ static void handle_rx(uint8_t interrupted_pin) {
 #define BW 4 //boiler water temp
 #define RW 5 //return water temp
 #define DW 8 //domestic home water temp
-float temp[16]; //using id as a single hex digit, then hardcode which sensor gets which meaning
+float temp[16]={85,85,85,85,85,85,85,85,85,85,85,85,85,85,85,85}; //using id as a single hex digit, then hardcode which sensor gets which meaning
 float S1temp[6],S2temp[6],S3temp[6],S1avg,S2avg,S3avg,S4avg,S5avg;
 void temp_task(void *argv) {
     ds18b20_addr_t addrs[SENSORS];
@@ -211,6 +211,7 @@ void temp_task(void *argv) {
             id = (addrs[j]>>56)&0xF;
             temp[id] = temps[j];
         } // ds18b20_measure_and_read_multi operation takes about 800ms to run, 3ms start, 750ms wait, 11ms/sensor to read
+        if (isnan(temp[S3])) {gpio_write(SENSOR_PIN,0);vTaskDelay(150/portTICK_PERIOD_MS);gpio_write(SENSOR_PIN,1);} //reset
         TEMP2HK(1);
         TEMP2HK(2);
         TEMP2HK(3);
@@ -420,7 +421,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             break; 
         case 4:
             if (tgt_heat2.value.int_value==2) { //test BLOR
-                   send_OT_frame( 0x10040200 ); //4  BoilerLockOutReset
+                   send_OT_frame( 0x10040100 ); //4.1  BoilerLockOutReset
             } else send_OT_frame( 0x00380000 ); //56 DHW setpoint write
             break;
         case 5: send_OT_frame( 0x00050000 ); break; //5  app specific fault flags
