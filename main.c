@@ -242,7 +242,7 @@ int heater(uint32_t seconds) {
     if ( (tm->tm_hour==22 || tm->tm_hour==7) && S3samples>360 ) {S3samples=0;S3total=0;}
     float S3long=20; //some harmless value
     if (S3samples>0) S3long=S3total/S3samples;
-    printf("S3long=%7.4f S3samples=%d S3total=%f\n",S3long,S3samples,S3total);
+    printf("                      S3long=%7.4f S3samples=%d S3total=%1.4f\n",S3long,S3samples,S3total);
 
     int eval_time=0,heater1=0,heater2=0;
     sprintf(strtm,"DST%dwd%dyd%-3d %2d|%02d:%02d:%02d.%06d",tm->tm_isdst,tm->tm_wday,tm->tm_yday,tm->tm_mday, \
@@ -251,7 +251,7 @@ int heater(uint32_t seconds) {
     if (tgt_temp2.value.float_value>setpoint2) setpoint2+=0.0625;
     if (tgt_temp2.value.float_value<setpoint2) setpoint2-=0.0625;
     if (tm->tm_hour>6 && (setpoint2-S2avg>0)) { // daytime logic from 7AM till midnight
-        heat_sp=(35+(setpoint2-S2avg)*16); if (heat_sp>75) heat_sp=75;
+        heat_sp=35+(setpoint2-S2avg)*16; if (heat_sp>75) heat_sp=75;
         heater2=1;
     } else heat_sp=35;//request lowest possible output for floor heating while not heating radiators explicitly
 
@@ -416,7 +416,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             if (tgt_heat2.value.int_value==1) { //use on/off switching thermostat
                    message=0x10014b00; //75 deg
             } else if (tgt_heat2.value.int_value==3) { //run heater algoritm for floor heating
-                   message=0x10010000|(uint32_t)heat_sp*256;
+                   message=0x10010000|(uint32_t)(heat_sp*256);
             } else message=0x10010000|(uint32_t)(tgt_temp1.value.float_value*2-1)*256; //range from 19 - 75 deg
             send_OT_frame(message); //1  CH setpoint in deg C
             break;

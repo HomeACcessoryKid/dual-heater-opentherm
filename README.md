@@ -42,6 +42,8 @@ later... for now see the code
 
 ## Version history
 
+- 0.6.8 heat_sp fix
+brackets brackets brackets
 - 0.6.7 introduce S3long accumulated outside temperature
 and heat_sp as a float 8.8
 and slow adjust for setpoint2
