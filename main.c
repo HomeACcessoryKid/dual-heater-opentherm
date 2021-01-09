@@ -191,6 +191,8 @@ static void handle_rx(uint8_t interrupted_pin) {
 #define DW 8 //domestic home water temp
 float temp[16]={85,85,85,85,85,85,85,85,85,85,85,85,85,85,85,85}; //using id as a single hex digit, then hardcode which sensor gets which meaning
 float S1temp[6],S2temp[6],S3temp[6],S1avg,S2avg,S3avg,S4avg,S5avg;
+float S3total=0;
+int   S3samples=0;
 void temp_task(void *argv) {
     ds18b20_addr_t addrs[SENSORS];
     float temps[SENSORS];
@@ -211,7 +213,8 @@ void temp_task(void *argv) {
             id = (addrs[j]>>56)&0xF;
             temp[id] = temps[j];
         } // ds18b20_measure_and_read_multi operation takes about 800ms to run, 3ms start, 750ms wait, 11ms/sensor to read
-        if (isnan(temp[S3])) {gpio_write(SENSOR_PIN,0);vTaskDelay(150/portTICK_PERIOD_MS);gpio_write(SENSOR_PIN,1);} //reset
+        if (!isnan(temp[S3]) && temp[S3]!=85) S3samples++,S3total+=temp[S3];
+        else {gpio_write(SENSOR_PIN,0);vTaskDelay(150/portTICK_PERIOD_MS);gpio_write(SENSOR_PIN,1);} //reset one-wire bus
         TEMP2HK(1);
         TEMP2HK(2);
         TEMP2HK(3);
@@ -224,10 +227,10 @@ void temp_task(void *argv) {
 #define RTC_MAGIC   0xaabecede
 enum    modes { STABLE, HEAT, EVAL };
 int     mode=EVAL,peak_time=15; //after update, evaluate only 15 minutes
-float   peak_temp=0,prev_setp=21.5;
+float   peak_temp=0,prev_setp=21.5,setpoint2=20.5,heat_sp=35;
 time_t  heat_till=0;
 int     time_set=0,time_on=0,stateflg=0,errorflg=0;
-int     heat_sp=35,heat_on;
+int     heat_on;
 int heater(uint32_t seconds) {
     if (!time_set) return 0; //need reliable time
     char str[26], strtm[32]; // e.g. DST0wd2yd4    5|07:02:00.060303
@@ -236,13 +239,19 @@ int heater(uint32_t seconds) {
     time_t now=tv.tv_sec;
     struct tm *tm = localtime(&now);
 
+    if ( (tm->tm_hour==22 || tm->tm_hour==7) && S3samples>360 ) {S3samples=0;S3total=0;}
+    float S3long=20; //some harmless value
+    if (S3samples>0) S3long=S3total/S3samples;
+    printf("S3long=%7.4f S3samples=%d S3total=%f\n",S3long,S3samples,S3total);
+
     int eval_time=0,heater1=0,heater2=0;
     sprintf(strtm,"DST%dwd%dyd%-3d %2d|%02d:%02d:%02d.%06d",tm->tm_isdst,tm->tm_wday,tm->tm_yday,tm->tm_mday, \
             tm->tm_hour,tm->tm_min,tm->tm_sec,(int)tv.tv_usec);
     //heater2 logic
-    float setpoint2=tgt_temp2.value.float_value;
+    if (tgt_temp2.value.float_value>setpoint2) setpoint2+=0.0625;
+    if (tgt_temp2.value.float_value<setpoint2) setpoint2-=0.0625;
     if (tm->tm_hour>6 && (setpoint2-S2avg>0)) { // daytime logic from 7AM till midnight
-        heat_sp=(int)(35+(setpoint2-S2avg)*16); if (heat_sp>75) heat_sp=75;
+        heat_sp=(35+(setpoint2-S2avg)*16); if (heat_sp>75) heat_sp=75;
         heater2=1;
     } else heat_sp=35;//request lowest possible output for floor heating while not heating radiators explicitly
 
@@ -299,7 +308,7 @@ int heater(uint32_t seconds) {
     if (time_on<0) time_on=0;
     printf("S1=%7.4f S2=%7.4f S3=%7.4f f=%6.1f time-on=%3d peak_temp=%7.4f peak_time=%2d<%2d ST=%02x mode=%d%s\n", \
             S1avg,S2avg,S3avg,ffactor,time_on,peak_temp,peak_time,eval_time,stateflg,mode,(mode==1)?(str+5):"");
-    printf("Heater@%-4d                     %s => heater_sp:%2d h1:%d + h2:%d = on:%d\n", \
+    printf("Heater@%-4d                     %s => heat_sp:%4.1f h1:%d + h2:%d = on:%d\n", \
             (seconds+10)/60,strtm,heat_sp,heater1,heater2,result);
     
     //save state to RTC memory
@@ -311,6 +320,9 @@ int heater(uint32_t seconds) {
                           WRITE_PERI_REG(RTC_ADDR+24,peak_time); //int
     dp=(void*)&tgt_temp1.value.float_value; WRITE_PERI_REG(RTC_ADDR+28,*dp      ); //float
     dp=(void*)&tgt_temp2.value.float_value; WRITE_PERI_REG(RTC_ADDR+32,*dp      ); //float
+    dp=(void*)&setpoint2; WRITE_PERI_REG(RTC_ADDR+36,*dp      ); //float
+    dp=(void*)&S3total;   WRITE_PERI_REG(RTC_ADDR+40,*dp      ); //float
+                          WRITE_PERI_REG(RTC_ADDR+44,S3samples); //int
                           WRITE_PERI_REG(RTC_ADDR   ,RTC_MAGIC);
     return result;
 }
@@ -328,9 +340,13 @@ void init_task(void *argv) {
         peak_time               =READ_PERI_REG(RTC_ADDR+24);
         dp=(void*)&(tgt_temp1.value.float_value);*dp=READ_PERI_REG(RTC_ADDR+28);
         dp=(void*)&(tgt_temp2.value.float_value);*dp=READ_PERI_REG(RTC_ADDR+32);
+        dp=(void*)&setpoint2;*dp=READ_PERI_REG(RTC_ADDR+36);
+        dp=(void*)&S3total;  *dp=READ_PERI_REG(RTC_ADDR+40);
+        S3samples               =READ_PERI_REG(RTC_ADDR+44);
     }
     printf("INITIAL prev_setp=%2.1f f=%2.1f peak_time=%2d peak_temp=%2.4f mode=%d heat_till %s", \
             prev_setp,ffactor,peak_time,peak_temp,mode,ctime(&heat_till));
+    S1temp[0]=22;S2temp[0]=22;
     
     setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1); tzset();
     sntp_setoperatingmode(SNTP_OPMODE_POLL);

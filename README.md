@@ -42,6 +42,10 @@ later... for now see the code
 
 ## Version history
 
+- 0.6.7 introduce S3long accumulated outside temperature
+and heat_sp as a float 8.8
+and slow adjust for setpoint2
+and more initialisation robustness
 - 0.6.6 prevent incorrect temperature readings
 and fix BLOR encoding error
 - 0.6.5 OT command testing for BLOR and Boiler Sequencer Control
