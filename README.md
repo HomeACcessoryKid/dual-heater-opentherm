@@ -42,6 +42,8 @@ later... for now see the code
 
 ## Version history
 
+- 0.6.9 automatic boost reset
+and remove outside water temperature sensors
 - 0.6.8 heat_sp fix
 brackets brackets brackets
 - 0.6.7 introduce S3long accumulated outside temperature

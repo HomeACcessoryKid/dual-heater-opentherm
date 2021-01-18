@@ -79,8 +79,6 @@ homekit_characteristic_t cur_temp2 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE
 homekit_characteristic_t dis_temp2 = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY_UNITS,     0 );
 
 homekit_characteristic_t cur_temp3 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         3.0 );
-homekit_characteristic_t cur_temp4 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         4.0 );
-homekit_characteristic_t cur_temp5 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         5.0 );
 
 float ffactor=600;
 #define HOMEKIT_CHARACTERISTIC_CUSTOM_FACTOR HOMEKIT_CUSTOM_UUID("F0000009")
@@ -180,23 +178,21 @@ static void handle_rx(uint8_t interrupted_pin) {
                             homekit_characteristic_notify(&cur_temp##n,HOMEKIT_FLOAT(cur_temp##n.value.float_value)); \
                     } while (0) //TODO: do we need to test for changed values or is that embedded in notify routine?
 #define BEAT 10 //in seconds
-#define SENSORS 5
+#define SENSORS 3
 #define S1 0 //   salon temp sensor
 #define S2 1 //upstairs temp sensor
 #define S3 6 // outdoor temp sensor
-#define S4 2 //outgoing water temp sensor
-#define S5 3 // ingoing water temp sensor
 #define BW 4 //boiler water temp
 #define RW 5 //return water temp
 #define DW 8 //domestic home water temp
 float temp[16]={85,85,85,85,85,85,85,85,85,85,85,85,85,85,85,85}; //using id as a single hex digit, then hardcode which sensor gets which meaning
-float S1temp[6],S2temp[6],S3temp[6],S1avg,S2avg,S3avg,S4avg,S5avg;
+float S1temp[6],S2temp[6],S3temp[6],S1avg,S2avg,S3avg;
 float S3total=0;
 int   S3samples=0;
 void temp_task(void *argv) {
     ds18b20_addr_t addrs[SENSORS];
     float temps[SENSORS];
-    float old_t1,old_t2,old_t3,old_t4,old_t5;
+    float old_t1,old_t2,old_t3;
     int sensor_count=0,id;
 
     while( (sensor_count=ds18b20_scan_devices(SENSOR_PIN, addrs, SENSORS)) != SENSORS) {
@@ -218,8 +214,6 @@ void temp_task(void *argv) {
         TEMP2HK(1);
         TEMP2HK(2);
         TEMP2HK(3);
-        TEMP2HK(4);
-        TEMP2HK(5);
     }
 }
 
@@ -230,7 +224,7 @@ int     mode=EVAL,peak_time=15; //after update, evaluate only 15 minutes
 float   peak_temp=0,prev_setp=21.5,setpoint2=20.5,heat_sp=35;
 time_t  heat_till=0;
 int     time_set=0,time_on=0,stateflg=0,errorflg=0;
-int     heat_on;
+int     heat_on, boost=0;
 int heater(uint32_t seconds) {
     if (!time_set) return 0; //need reliable time
     char str[26], strtm[32]; // e.g. DST0wd2yd4    5|07:02:00.060303
@@ -242,7 +236,7 @@ int heater(uint32_t seconds) {
     if ( (tm->tm_hour==22 || tm->tm_hour==7) && S3samples>360 ) {S3samples=0;S3total=0;}
     float S3long=20; //some harmless value
     if (S3samples>0) S3long=S3total/S3samples;
-    printf("                      S3long=%7.4f S3samples=%d S3total=%1.4f\n",S3long,S3samples,S3total);
+    printf("                  S3long=%7.4f S3samples=%d S3total=%1.4f\n",S3long,S3samples,S3total);
 
     int eval_time=0,heater1=0,heater2=0;
     sprintf(strtm,"DST%dwd%dyd%-3d %2d|%02d:%02d:%02d.%06d",tm->tm_isdst,tm->tm_wday,tm->tm_yday,tm->tm_mday, \
@@ -257,13 +251,18 @@ int heater(uint32_t seconds) {
 
     //heater1 logic
     float setpoint1=tgt_temp1.value.float_value;
+    if (setpoint1>21.5) boost++; else boost=0;
+    if (boost>30) {
+        tgt_temp1.value.float_value=21.5;
+        homekit_characteristic_notify(&tgt_temp1,HOMEKIT_FLOAT(tgt_temp1.value.float_value));
+    }
     if (setpoint1!=prev_setp) {
         if (setpoint1>prev_setp) mode=STABLE; else mode=EVAL;
         prev_setp=setpoint1;
     }
     if (mode==EVAL) {
         eval_time=((setpoint1-peak_temp)>0.06) ? 4/(setpoint1-peak_temp) : 64 ; //max eval time will be 64 minutes
-        if (S1avg<(peak_temp-0.07) || peak_time++>=eval_time) {
+        if (S1avg<(peak_temp-0.07) || peak_time++>=eval_time || S1avg>setpoint1) {
             mode=STABLE;
             //adjust ffactor
             peak_temp=0,peak_time=0;
@@ -473,7 +472,6 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     
     if (!timeIndex) {
         CalcAvg(S1); CalcAvg(S2); CalcAvg(S3);
-        S4avg=temp[S4]; S5avg=temp[S5];
     }
     
     if (seconds%60==50) { //allow 6 temperature measurments to make sure all info is loaded
@@ -485,8 +483,8 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     }
 
     if (timeIndex==3) {
-        printf("S1=%7.4f S2=%7.4f S3=%7.4f PR=%4.2f DW=%4.1f S4=%4.1f S5=%4.1f ERR=%02x RW=%4.1f BW=%4.1f POT=%3d ON=%d MOD=%02.0f ST=%02x\n", \
-           temp[S1],temp[S2],temp[S3],pressure,temp[DW],temp[S4],temp[S5],errorflg,temp[RW],temp[BW],pump_off_time,heat_on,curr_mod,stateflg);
+        printf("S1=%7.4f S2=%7.4f S3=%7.4f PR=%4.2f DW=%4.1f ERR=%02x RW=%4.1f BW=%4.1f POT=%3d ON=%d MOD=%02.0f ST=%02x\n", \
+           temp[S1],temp[S2],temp[S3],pressure,temp[DW],errorflg,temp[RW],temp[BW],pump_off_time,heat_on,curr_mod,stateflg);
     }
 
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
@@ -535,19 +533,7 @@ homekit_accessory_t *accessories[] = {
                 .characteristics=(homekit_characteristic_t*[]){
                     HOMEKIT_CHARACTERISTIC(NAME, "Outdoor T"),
                     &cur_temp3,
-                    NULL
-                }),
-            HOMEKIT_SERVICE(TEMPERATURE_SENSOR, .primary=true,
-                .characteristics=(homekit_characteristic_t*[]){
-                    HOMEKIT_CHARACTERISTIC(NAME, "Heater T-out"),
-                    &cur_temp4,
                     &ota_trigger,
-                    NULL
-                }),
-            HOMEKIT_SERVICE(TEMPERATURE_SENSOR,
-                .characteristics=(homekit_characteristic_t*[]){
-                    HOMEKIT_CHARACTERISTIC(NAME, "Heater T-in"),
-                    &cur_temp5,
                     &factor,
                     NULL
                 }),
