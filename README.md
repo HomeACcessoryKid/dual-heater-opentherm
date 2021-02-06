@@ -20,7 +20,7 @@ The top floor is much faster in reacting to heat input. And to make use of the m
 I set the water temperature output as a linear function of the top floor setpoint minus measured temperature.
 
 This is not a proper PID but I will fix that later. Maybe the fact that the kettle swithes off and on based on the
-fact(?) that it  cannot get rid of the warmth when on the lowest modulation is good enough.
+fact(?) that it cannot get rid of the warmth when on the lowest modulation, is good enough.
 
 ### The Catch
 Finally, what to do if the bottom is warm enough and upstairs needs warming?
@@ -34,7 +34,7 @@ The heater will change and notify its `current_heater_mode` which, by using Eve,
 the `pump active_state`. The pump will change and notify its `in_use` value which, by using Eve, triggers a Scene that changes
 the `target_heater_mode` to cool.
 On these two events, the pump will stop for 3 minutes and the heater will know for sure this is true.
-The `current` values are set back to allow a new trigger  to be detected.
+The `current` values are set back to allow a new trigger to be detected.
 
 ## The gory details
 later... for now see the code
@@ -42,6 +42,8 @@ later... for now see the code
 
 ## Version history
 
+- 0.6.10 also regulate heater2 at night
+just set the setpoint to a lower value
 - 0.6.9 automatic boost reset
 and remove outside water temperature sensors
 - 0.6.8 heat_sp fix

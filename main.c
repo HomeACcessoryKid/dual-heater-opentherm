@@ -244,7 +244,7 @@ int heater(uint32_t seconds) {
     //heater2 logic
     if (tgt_temp2.value.float_value>setpoint2) setpoint2+=0.0625;
     if (tgt_temp2.value.float_value<setpoint2) setpoint2-=0.0625;
-    if (tm->tm_hour>6 && (setpoint2-S2avg>0)) { // daytime logic from 7AM till midnight
+    if (setpoint2-S2avg>0) {
         heat_sp=35+(setpoint2-S2avg)*16; if (heat_sp>75) heat_sp=75;
         heater2=1;
     } else heat_sp=35;//request lowest possible output for floor heating while not heating radiators explicitly
@@ -529,7 +529,7 @@ homekit_accessory_t *accessories[] = {
                     HOMEKIT_CHARACTERISTIC(IDENTIFY, identify),
                     NULL
                 }),
-            HOMEKIT_SERVICE(TEMPERATURE_SENSOR,
+            HOMEKIT_SERVICE(TEMPERATURE_SENSOR, .primary=true,
                 .characteristics=(homekit_characteristic_t*[]){
                     HOMEKIT_CHARACTERISTIC(NAME, "Outdoor T"),
                     &cur_temp3,
