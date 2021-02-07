@@ -42,6 +42,10 @@ later... for now see the code
 
 ## Version history
 
+- 0.6.13 changed min temp value and pairing code
+in esp-homekit changed minimum from 0 deg celcius to -50
+not starting UDPlogger and tasks until paired, else out of memory during pairing
+- 0.6.12 local debug version
 - 0.6.11 undo change to TEMPERATURE_SENSOR, .primary=true
 homekit started to ignore the device...
 - 0.6.10 also regulate heater2 at night
