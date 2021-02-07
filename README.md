@@ -42,6 +42,8 @@ later... for now see the code
 
 ## Version history
 
+- 0.6.11 undo change to TEMPERATURE_SENSOR, .primary=true
+homekit started to ignore the device...
 - 0.6.10 also regulate heater2 at night
 just set the setpoint to a lower value
 - 0.6.9 automatic boost reset

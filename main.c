@@ -87,7 +87,7 @@ float ffactor=600;
     .description = "HeaterFactor", \
     .format = homekit_format_uint16, \
     .min_value=(float[])   {50}, \
-    .max_value=(float[]) {1500}, \
+    .max_value=(float[]) {2000}, \
     .min_step  = (float[]) {50}, \
     .permissions = homekit_permissions_paired_read \
                  | homekit_permissions_paired_write, \
@@ -529,7 +529,7 @@ homekit_accessory_t *accessories[] = {
                     HOMEKIT_CHARACTERISTIC(IDENTIFY, identify),
                     NULL
                 }),
-            HOMEKIT_SERVICE(TEMPERATURE_SENSOR, .primary=true,
+            HOMEKIT_SERVICE(TEMPERATURE_SENSOR,
                 .characteristics=(homekit_characteristic_t*[]){
                     HOMEKIT_CHARACTERISTIC(NAME, "Outdoor T"),
                     &cur_temp3,
