@@ -490,7 +490,13 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
 } //this is a timer that restarts every 1 second
 
+homekit_server_config_t config;
 void device_init() {
+  if (homekit_is_paired()) {
+    config.on_event=NULL;
+    udplog_init(3);
+    UDPLUS("\n\n\nDual-Heater-OpenTherm " VERSION "\n");
+    
 //     gpio_enable(LED_PIN, GPIO_OUTPUT); gpio_write(LED_PIN, 0);
     gpio_set_pullup(SENSOR_PIN, true, true);
     gpio_enable(SWITCH_PIN, GPIO_INPUT);
@@ -512,6 +518,7 @@ void device_init() {
     xTaskCreate(init_task,"Time", 512, NULL, 6, NULL);
     xTimer=xTimerCreate( "Timer", 1000/portTICK_PERIOD_MS, pdTRUE, (void*)0, vTimerCallback);
     xTimerStart(xTimer, 0);
+  }
 }
 
 homekit_accessory_t *accessories[] = {
@@ -596,14 +603,13 @@ homekit_accessory_t *accessories[] = {
 
 homekit_server_config_t config = {
     .accessories = accessories,
+    .on_event=device_init,
     .password = "111-11-111"
 };
 
 
 void user_init(void) {
     uart_set_baud(0, 115200);
-    udplog_init(3);
-    UDPLUS("\n\n\nDual-Heater-OpenTherm " VERSION "\n");
 
     device_init();
     
