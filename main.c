@@ -8,7 +8,9 @@
  *  UDPlogger is used to have remote logging
  *  LCM is enabled in case you want remote updates
  */
-
+// TODO: if heater wants ON, but boiler-lockout active, do not count down time
+// TODO: apply hysteresis to S2avg
+// TODO: make factor depend on S3 long avg
 #include <stdio.h>
 #include <espressif/esp_wifi.h>
 #include <espressif/esp_sta.h>
@@ -262,7 +264,7 @@ int heater(uint32_t seconds) {
     }
     if (mode==EVAL) {
         eval_time=((setpoint1-peak_temp)>0.06) ? 4/(setpoint1-peak_temp) : 64 ; //max eval time will be 64 minutes
-        if (S1avg<(peak_temp-0.07) || peak_time++>=eval_time || S1avg>setpoint1) {
+        if (S1avg<(peak_temp-0.07) || peak_time++>=eval_time || S1avg>=setpoint1) {
             mode=STABLE;
             //adjust ffactor
             peak_temp=0,peak_time=0;
@@ -536,7 +538,7 @@ homekit_accessory_t *accessories[] = {
                     HOMEKIT_CHARACTERISTIC(IDENTIFY, identify),
                     NULL
                 }),
-            HOMEKIT_SERVICE(TEMPERATURE_SENSOR,
+            HOMEKIT_SERVICE(TEMPERATURE_SENSOR, .primary=true,
                 .characteristics=(homekit_characteristic_t*[]){
                     HOMEKIT_CHARACTERISTIC(NAME, "Outdoor T"),
                     &cur_temp3,
