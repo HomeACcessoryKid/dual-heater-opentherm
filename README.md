@@ -42,6 +42,10 @@ later... for now see the code
 
 ## Version history
 
+- 0.7.0 - 0.7.6 introducing MQTT updates to Domoticz
+an alert for ERR flag field
+many temperatures as well as modulation and pressure
+using base idx so, depends on consecutive block of idx (more or less)
 - 0.6.13 changed min temp value and pairing code
 in esp-homekit changed minimum from 0 deg celcius to -50
 not starting UDPlogger and tasks until paired, else out of memory during pairing

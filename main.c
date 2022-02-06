@@ -539,7 +539,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
         CalcAvg(S1); CalcAvg(S2); CalcAvg(S3);
     }
     
-    errorflg=(seconds/600)%2; //test trick to change outcome every 10 minutes
+    //errorflg=(seconds/600)%2; //test trick to change outcome every 10 minutes
     if (seconds%60==5) {
         if (errorflg) { //publish a RED (4) ALERT on domoticz
             if (push>0) {
@@ -547,7 +547,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
                 if (n<0) printf("MQTT publish of ALERT failed because %s\n",MQTT_CLIENT_ERROR(n)); else push--;
                 if (push==0) push=-2;
             }
-        } else { //publish a GREY (0) ALERT on domoticz
+        } else { //publish a GREY (0) clean ALERT on domoticz
             if (push<0) {
                 int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"Heater OK\"}", idx);
                 if (n<0) printf("MQTT publish of ALERT failed because %s\n",MQTT_CLIENT_ERROR(n)); else push++;
