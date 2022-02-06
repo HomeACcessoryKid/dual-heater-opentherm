@@ -583,6 +583,7 @@ void device_init() {
     //sysparam_set_string("ota_string", "192.168.178.5;heater;fakepassword;68"); //can be used if not using LCM
     ota_string();
     mqttconf.queue_size=20;
+    mqttconf.msg_len   =64; //to fit the ALERT
     mqtt_client_init(&mqttconf);
     xQueue = xQueueCreate(1, sizeof(uint32_t));
     xTaskCreate(temp_task,"Temp", 512, NULL, 1, &tempTask);
