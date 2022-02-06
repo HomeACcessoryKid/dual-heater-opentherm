@@ -416,6 +416,7 @@ void init_task(void *argv) {
 float curr_mod=0,pressure=0;
 static TaskHandle_t tempTask = NULL;
 int timeIndex=0,switch_state=0,pump_off_time=0,retrigger=0;
+int push=-1,n;
 TimerHandle_t xTimer;
 void vTimerCallback( TimerHandle_t xTimer ) {
     uint32_t seconds = ( uint32_t ) pvTimerGetTimerID( xTimer );
@@ -503,10 +504,22 @@ void vTimerCallback( TimerHandle_t xTimer ) {
                 homekit_characteristic_notify(&cur_heat1,HOMEKIT_UINT8(cur_heat1.value.int_value));
                 break;
             case 5:
-                errorflg=(message&0x00003f00)/256; 
-                if (!errorflg) { //publish a RED (4) ALERT on domoticz
-                    int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":4,\"svalue\":\"Heater ERR: 0x%02X\"}", idx, errorflg);
-                    if (n<0) printf("MQTT publish of ALERT failed because %s\n",MQTT_CLIENT_ERROR(n));
+                errorflg=(message&0x00003f00)/256;
+                errorflg=(seconds/300)%2; //test trick to change outcome every 5 minutes
+                if (seconds%60==45) {
+                    if (errorflg) { //publish a RED (4) ALERT on domoticz
+                        if (push>0) {
+                            n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":4,\"svalue\":\"Heater ERR: 0x%02X\"}", idx, errorflg);
+                            if (n<0) printf("MQTT publish of ALERT failed because %s\n",MQTT_CLIENT_ERROR(n)); else push--;
+                            if (push==0) push=-2;
+                        }
+                    } else { //publish a GREY (0) ALERT on domoticz
+                        if (push<0) {
+                            n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"Heater ERR: 0x%02X\"}", idx, errorflg);
+                            if (n<0) printf("MQTT publish of ALERT failed because %s\n",MQTT_CLIENT_ERROR(n)); else push++;
+                            if (push==0) push=3;            
+                        }
+                    }
                 }
                 break;
             case 6: pressure=(float)(message&0x0000ffff)/256; break;
