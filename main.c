@@ -52,6 +52,18 @@
 #endif
 
 int idx; //the domoticz base index
+#define PUBLISH(name) do {int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"%.1f\"}", idx+name##_ix, name##_fv); \
+                            if (n<0) printf("MQTT publish of %s failed because %s\n",#name,MQTT_CLIENT_ERROR(n)); \
+                           } while(0)
+#define     S1avg_fv S1avg
+#define     S1avg_ix 0
+#define tgt_temp1_fv tgt_temp1.value.float_value
+#define tgt_temp1_ix 1
+#define     S2avg_fv S2avg
+#define     S2avg_ix 2
+#define tgt_temp2_fv tgt_temp2.value.float_value
+#define tgt_temp2_ix 3
+
 
 /* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS =============================================================== */
 // add this section to make your device OTA capable
@@ -95,8 +107,7 @@ void tgt_temp1_set(homekit_value_t value) {
         return;
     }
     tgt_temp1.value=value;
-    int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"%.1f\"}", idx+1, tgt_temp1.value.float_value);
-    if (n<0) printf("MQTT publish failed because %s\n",MQTT_CLIENT_ERROR(n));
+    PUBLISH(tgt_temp1);
 }
 
 void tgt_temp2_set(homekit_value_t value) {
@@ -105,8 +116,7 @@ void tgt_temp2_set(homekit_value_t value) {
         return;
     }
     tgt_temp2.value=value;
-    int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"%.1f\"}", idx+3, tgt_temp2.value.float_value);
-    if (n<0) printf("MQTT publish failed because %s\n",MQTT_CLIENT_ERROR(n));
+    PUBLISH(tgt_temp2);
 }
 
 
@@ -339,11 +349,8 @@ int heater(uint32_t seconds) {
             S1avg,S2avg,S3avg,ffactor,time_on,peak_temp,peak_time,eval_time,stateflg,mode,(mode==1)?(str+5):"");
     printf("Heater@%-4d                     %s => heat_sp:%4.1f h1:%d + h2:%d = on:%d\n", \
             (seconds+10)/60,strtm,heat_sp,heater1,heater2,result);
-    int n;
-    n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"%.1f\"}", idx+0, S1avg);
-    if (n<0) printf("MQTT publish1 failed because %s\n",MQTT_CLIENT_ERROR(n)); //TODO: make this more efficient
-    n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"%.1f\"}", idx+2, S2avg);
-    if (n<0) printf("MQTT publish1 failed because %s\n",MQTT_CLIENT_ERROR(n));
+    PUBLISH(S1avg);
+    PUBLISH(S2avg);
     
     //save state to RTC memory
     uint32_t *dp;         WRITE_PERI_REG(RTC_ADDR+ 4,mode     ); //int
@@ -380,11 +387,8 @@ void init_task(void *argv) {
     }
     printf("INITIAL prev_setp=%2.1f f=%2.1f peak_time=%2d peak_temp=%2.4f mode=%d heat_till %s", \
             prev_setp,ffactor,peak_time,peak_temp,mode,ctime(&heat_till));
-    int n;
-    n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"%.1f\"}", idx+1, tgt_temp1.value.float_value);
-    if (n<0) printf("MQTT publish failed because %s\n",MQTT_CLIENT_ERROR(n));
-    n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"%.1f\"}", idx+3, tgt_temp2.value.float_value);
-    if (n<0) printf("MQTT publish failed because %s\n",MQTT_CLIENT_ERROR(n));
+    PUBLISH(tgt_temp1);
+    PUBLISH(tgt_temp2);
     S1temp[0]=22;S2temp[0]=22;
     
     setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1); tzset();
