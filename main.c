@@ -31,6 +31,8 @@
 #include "math.h"
 #include <lwip/apps/sntp.h>
 #include <espressif/esp8266/eagle_soc.h>
+#include "mqtt-client.h"
+#include <sysparam.h>
 
 #ifndef VERSION
  #error You must set VERSION=x.y.z to match github version tag x.y.z
@@ -48,6 +50,8 @@
 #ifndef LED_PIN
  #error LED_PIN is not specified
 #endif
+
+int idx; //the domoticz base index
 
 /* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS =============================================================== */
 // add this section to make your device OTA capable
@@ -68,19 +72,43 @@ homekit_characteristic_t revision     = HOMEKIT_CHARACTERISTIC_(FIRMWARE_REVISIO
 //    config.accessories[0]->config_number=c_hash;
 // end of OTA add-in instructions
 
+void tgt_temp1_set(homekit_value_t value);
+void tgt_temp2_set(homekit_value_t value);
 homekit_characteristic_t tgt_heat1 = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE,  3 );
 homekit_characteristic_t cur_heat1 = HOMEKIT_CHARACTERISTIC_(CURRENT_HEATING_COOLING_STATE, 0 );
-homekit_characteristic_t tgt_temp1 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         21.5 );
+homekit_characteristic_t tgt_temp1 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         21.5, .setter=tgt_temp1_set );
 homekit_characteristic_t cur_temp1 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         1.0 );
 homekit_characteristic_t dis_temp1 = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY_UNITS,     0 );
 
 homekit_characteristic_t tgt_heat2 = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE,  3 );
 homekit_characteristic_t cur_heat2 = HOMEKIT_CHARACTERISTIC_(CURRENT_HEATING_COOLING_STATE, 0 );
-homekit_characteristic_t tgt_temp2 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         20.5 );
+homekit_characteristic_t tgt_temp2 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         20.5, .setter=tgt_temp2_set );
 homekit_characteristic_t cur_temp2 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         2.0 );
 homekit_characteristic_t dis_temp2 = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY_UNITS,     0 );
 
 homekit_characteristic_t cur_temp3 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         3.0 );
+
+
+void tgt_temp1_set(homekit_value_t value) {
+    if (value.format != homekit_format_float) {
+        UDPLUO("Invalid target-value format: %d\n", value.format);
+        return;
+    }
+    tgt_temp1.value=value;
+    int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"%.1f\"}", idx+1, tgt_temp1.value.float_value);
+    if (n<0) printf("MQTT publish failed because %s\n",MQTT_CLIENT_ERROR(n));
+}
+
+void tgt_temp2_set(homekit_value_t value) {
+    if (value.format != homekit_format_float) {
+        UDPLUO("Invalid target-value format: %d\n", value.format);
+        return;
+    }
+    tgt_temp2.value=value;
+    int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"%.1f\"}", idx+3, tgt_temp2.value.float_value);
+    if (n<0) printf("MQTT publish failed because %s\n",MQTT_CLIENT_ERROR(n));
+}
+
 
 float ffactor=600;
 #define HOMEKIT_CHARACTERISTIC_CUSTOM_FACTOR HOMEKIT_CUSTOM_UUID("F0000009")
@@ -311,6 +339,11 @@ int heater(uint32_t seconds) {
             S1avg,S2avg,S3avg,ffactor,time_on,peak_temp,peak_time,eval_time,stateflg,mode,(mode==1)?(str+5):"");
     printf("Heater@%-4d                     %s => heat_sp:%4.1f h1:%d + h2:%d = on:%d\n", \
             (seconds+10)/60,strtm,heat_sp,heater1,heater2,result);
+    int n;
+    n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"%.1f\"}", idx+0, S1avg);
+    if (n<0) printf("MQTT publish1 failed because %s\n",MQTT_CLIENT_ERROR(n)); //TODO: make this more efficient
+    n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"%.1f\"}", idx+2, S2avg);
+    if (n<0) printf("MQTT publish1 failed because %s\n",MQTT_CLIENT_ERROR(n));
     
     //save state to RTC memory
     uint32_t *dp;         WRITE_PERI_REG(RTC_ADDR+ 4,mode     ); //int
@@ -347,6 +380,11 @@ void init_task(void *argv) {
     }
     printf("INITIAL prev_setp=%2.1f f=%2.1f peak_time=%2d peak_temp=%2.4f mode=%d heat_till %s", \
             prev_setp,ffactor,peak_time,peak_temp,mode,ctime(&heat_till));
+    int n;
+    n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"%.1f\"}", idx+1, tgt_temp1.value.float_value);
+    if (n<0) printf("MQTT publish failed because %s\n",MQTT_CLIENT_ERROR(n));
+    n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"%.1f\"}", idx+3, tgt_temp2.value.float_value);
+    if (n<0) printf("MQTT publish failed because %s\n",MQTT_CLIENT_ERROR(n));
     S1temp[0]=22;S2temp[0]=22;
     
     setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1); tzset();
@@ -492,6 +530,23 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
 } //this is a timer that restarts every 1 second
 
+mqtt_config_t mqttconf=MQTT_DEFAULT_CONFIG;
+char error[]="error";
+static void ota_string() {
+    char *dmtczbaseidx1=NULL;
+    char *otas;
+    if (sysparam_get_string("ota_string", &otas) == SYSPARAM_OK) {
+        mqttconf.host=strtok(otas,";");
+        mqttconf.user=strtok(NULL,";");
+        mqttconf.pass=strtok(NULL,";");
+        dmtczbaseidx1=strtok(NULL,";");
+    }
+    if (mqttconf.host==NULL) mqttconf.host=error;
+    if (mqttconf.user==NULL) mqttconf.user=error;
+    if (mqttconf.pass==NULL) mqttconf.pass=error;
+    if (dmtczbaseidx1==NULL) idx=1000; else idx=atoi(dmtczbaseidx1);
+}
+
 homekit_server_config_t config;
 void device_init() {
   if (homekit_is_paired()) {
@@ -515,6 +570,10 @@ void device_init() {
     dma_buf[ 0]=ONE; dma_buf[ 1]=ZERO; //start bit
     dma_buf[66]=ONE; dma_buf[67]=ZERO; //stop  bit
 
+    //sysparam_set_string("ota_string", "192.168.178.5;heater;fakepassword;68"); //can be used if not using LCM
+    ota_string();
+    mqttconf.queue_size=20;
+    mqtt_client_init(&mqttconf);
     xQueue = xQueueCreate(1, sizeof(uint32_t));
     xTaskCreate(temp_task,"Temp", 512, NULL, 1, &tempTask);
     xTaskCreate(init_task,"Time", 512, NULL, 6, NULL);

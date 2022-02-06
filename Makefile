@@ -7,6 +7,7 @@ EXTRA_COMPONENTS = \
     extras/onewire \
     extras/ds18b20 \
     extras/i2s_dma \
+    extras/paho_mqtt_c \
 	$(abspath esp-wolfssl) \
 	$(abspath esp-cjson) \
 	$(abspath esp-homekit) \
