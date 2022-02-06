@@ -63,7 +63,20 @@ int idx; //the domoticz base index
 #define     S1avg_ix 3
 #define     S2avg_fv S2avg
 #define     S2avg_ix 4
-
+#define  curr_mod_fv curr_mod
+#define  curr_mod_ix 5
+#define   heat_sp_fv heat_sp
+#define   heat_sp_ix 6
+#define   burnerW_fv temp[BW]
+#define   burnerW_ix 7
+#define   returnW_fv temp[RW]
+#define   returnW_ix 8
+#define  pressure_fv pressure*10.0
+#define  pressure_ix 9
+#define     S3avg_fv S3avg
+#define     S3avg_ix 10
+#define    S3long_fv S3long
+#define    S3long_ix 11
 
 /* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS =============================================================== */
 // add this section to make your device OTA capable
@@ -262,6 +275,7 @@ void temp_task(void *argv) {
 enum    modes { STABLE, HEAT, EVAL };
 int     mode=EVAL,peak_time=15; //after update, evaluate only 15 minutes
 float   peak_temp=0,prev_setp=21.5,setpoint2=20.5,heat_sp=35;
+float   curr_mod=0,pressure=0;
 time_t  heat_till=0;
 int     time_set=0,time_on=0,stateflg=0,errorflg=0;
 int     heat_on, boost=0;
@@ -351,6 +365,13 @@ int heater(uint32_t seconds) {
             (seconds+10)/60,strtm,heat_sp,heater1,heater2,result);
     PUBLISH(S1avg);
     PUBLISH(S2avg);
+    PUBLISH(curr_mod);
+    PUBLISH(heat_sp);
+    PUBLISH(burnerW);
+    PUBLISH(returnW);
+    PUBLISH(pressure);
+    PUBLISH(S3avg);
+    PUBLISH(S3long);
     
     //save state to RTC memory
     uint32_t *dp;         WRITE_PERI_REG(RTC_ADDR+ 4,mode     ); //int
@@ -413,10 +434,9 @@ void init_task(void *argv) {
             if ( !isnan(temp[Sx]) && temp[Sx]!=85 )         Sx##temp[0]=temp[Sx];    \
             Sx##avg=(Sx##temp[0]+Sx##temp[1]+Sx##temp[2]+Sx##temp[3]+Sx##temp[4]+Sx##temp[5])/6.0; \
         } while(0)
-float curr_mod=0,pressure=0;
 static TaskHandle_t tempTask = NULL;
 int timeIndex=0,switch_state=0,pump_off_time=0,retrigger=0;
-int push=-1,n;
+int push=-1;
 TimerHandle_t xTimer;
 void vTimerCallback( TimerHandle_t xTimer ) {
     uint32_t seconds = ( uint32_t ) pvTimerGetTimerID( xTimer );
@@ -503,25 +523,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
                 } else cur_heat1.value.int_value=0;
                 homekit_characteristic_notify(&cur_heat1,HOMEKIT_UINT8(cur_heat1.value.int_value));
                 break;
-            case 5:
-                errorflg=(message&0x00003f00)/256;
-                errorflg=(seconds/300)%2; //test trick to change outcome every 5 minutes
-                if (seconds%60==45) {
-                    if (errorflg) { //publish a RED (4) ALERT on domoticz
-                        if (push>0) {
-                            n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":4,\"svalue\":\"Heater ERR: 0x%02X\"}", idx, errorflg);
-                            if (n<0) printf("MQTT publish of ALERT failed because %s\n",MQTT_CLIENT_ERROR(n)); else push--;
-                            if (push==0) push=-2;
-                        }
-                    } else { //publish a GREY (0) ALERT on domoticz
-                        if (push<0) {
-                            n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"Heater ERR: 0x%02X\"}", idx, errorflg);
-                            if (n<0) printf("MQTT publish of ALERT failed because %s\n",MQTT_CLIENT_ERROR(n)); else push++;
-                            if (push==0) push=3;            
-                        }
-                    }
-                }
-                break;
+            case 5: errorflg=       (message&0x00003f00)/256; break;
             case 6: pressure=(float)(message&0x0000ffff)/256; break;
             case 7: temp[DW]=(float)(message&0x0000ffff)/256; break;
             case 8: temp[RW]=(float)(message&0x0000ffff)/256; break;
@@ -537,6 +539,23 @@ void vTimerCallback( TimerHandle_t xTimer ) {
         CalcAvg(S1); CalcAvg(S2); CalcAvg(S3);
     }
     
+    errorflg=(seconds/600)%2; //test trick to change outcome every 10 minutes
+    if (seconds%60==5) {
+        if (errorflg) { //publish a RED (4) ALERT on domoticz
+            if (push>0) {
+                int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":4,\"svalue\":\"Heater ERR: 0x%02X\"}", idx, errorflg);
+                if (n<0) printf("MQTT publish of ALERT failed because %s\n",MQTT_CLIENT_ERROR(n)); else push--;
+                if (push==0) push=-2;
+            }
+        } else { //publish a GREY (0) ALERT on domoticz
+            if (push<0) {
+                int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"Heater OK\"}", idx);
+                if (n<0) printf("MQTT publish of ALERT failed because %s\n",MQTT_CLIENT_ERROR(n)); else push++;
+                if (push==0) push=3;            
+            }
+        }
+    }
+
     if (seconds%60==50) { //allow 6 temperature measurments to make sure all info is loaded
         heat_on=0;
         cur_heat2.value.int_value=heater(seconds); //sets heat_sp and returns heater result, 0, 1 or 2
