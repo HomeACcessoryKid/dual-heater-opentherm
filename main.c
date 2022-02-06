@@ -55,14 +55,14 @@ int idx; //the domoticz base index
 #define PUBLISH(name) do {int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"%.1f\"}", idx+name##_ix, name##_fv); \
                             if (n<0) printf("MQTT publish of %s failed because %s\n",#name,MQTT_CLIENT_ERROR(n)); \
                            } while(0)
-#define     S1avg_fv S1avg
-#define     S1avg_ix 0
 #define tgt_temp1_fv tgt_temp1.value.float_value
 #define tgt_temp1_ix 1
-#define     S2avg_fv S2avg
-#define     S2avg_ix 2
 #define tgt_temp2_fv tgt_temp2.value.float_value
-#define tgt_temp2_ix 3
+#define tgt_temp2_ix 2
+#define     S1avg_fv S1avg
+#define     S1avg_ix 3
+#define     S2avg_fv S2avg
+#define     S2avg_ix 4
 
 
 /* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS =============================================================== */
@@ -502,7 +502,13 @@ void vTimerCallback( TimerHandle_t xTimer ) {
                 } else cur_heat1.value.int_value=0;
                 homekit_characteristic_notify(&cur_heat1,HOMEKIT_UINT8(cur_heat1.value.int_value));
                 break;
-            case 5: errorflg=       (message&0x00003f00)/256; break;
+            case 5:
+                errorflg=(message&0x00003f00)/256; 
+                if (!errorflg) { //publish a RED (4) ALERT on domoticz
+                    int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":4,\"svalue\":\"Heater ERR: 0x%02X\"}", idx, errorflg);
+                    if (n<0) printf("MQTT publish of ALERT failed because %s\n",MQTT_CLIENT_ERROR(n));
+                }
+                break;
             case 6: pressure=(float)(message&0x0000ffff)/256; break;
             case 7: temp[DW]=(float)(message&0x0000ffff)/256; break;
             case 8: temp[RW]=(float)(message&0x0000ffff)/256; break;
