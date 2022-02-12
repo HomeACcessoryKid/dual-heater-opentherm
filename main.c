@@ -63,8 +63,8 @@ int idx; //the domoticz base index
 #define     S1avg_ix 3
 #define     S2avg_fv S2avg
 #define     S2avg_ix 4
-#define  curr_mod_fv curr_mod
-#define  curr_mod_ix 5
+#define  heat_mod_fv heat_mod
+#define  heat_mod_ix 5
 #define   heat_sp_fv heat_sp
 #define   heat_sp_ix 6
 #define   burnerW_fv temp[BW]
@@ -275,9 +275,9 @@ void temp_task(void *argv) {
 enum    modes { STABLE, HEAT, EVAL };
 int     mode=EVAL,peak_time=15; //after update, evaluate only 15 minutes
 float   peak_temp=0,prev_setp=21.5,setpoint2=20.5,heat_sp=35;
-float   curr_mod=0,pressure=0;
+float   curr_mod=0,heat_mod=0,pressure=0;
 time_t  heat_till=0;
-int     time_set=0,time_on=0,stateflg=0,errorflg=0;
+int     time_set=0,time_on=0,stateflg=0,old_stateflg=0,errorflg=0;
 int     heat_on, boost=0;
 int heater(uint32_t seconds) {
     if (!time_set) return 0; //need reliable time
@@ -287,10 +287,12 @@ int heater(uint32_t seconds) {
     time_t now=tv.tv_sec;
     struct tm *tm = localtime(&now);
 
-    if ( (tm->tm_hour==22 || tm->tm_hour==7) && S3samples>360 ) {S3samples=0;S3total=0;}
-    float S3long=20; //some harmless value
-    if (S3samples>0) S3long=S3total/S3samples;
-    printf("                  S3long=%7.4f S3samples=%d S3total=%1.4f\n",S3long,S3samples,S3total);
+    if ( (tm->tm_hour==22 || tm->tm_hour==7) && S3samples>360 ) {
+        float S3long=S3total/S3samples;
+        PUBLISH(S3long);
+        S3samples=0;S3total=0;
+        PUBLISH(tgt_temp1); //to refresh the report to MQTT because this setpoint almost never changes
+    }
 
     int eval_time=0,heater1=0,heater2=0;
     sprintf(strtm,"DST%dwd%dyd%-3d %2d|%02d:%02d:%02d.%06d",tm->tm_isdst,tm->tm_wday,tm->tm_yday,tm->tm_mday, \
@@ -365,13 +367,12 @@ int heater(uint32_t seconds) {
             (seconds+10)/60,strtm,heat_sp,heater1,heater2,result);
     PUBLISH(S1avg);
     PUBLISH(S2avg);
-    PUBLISH(curr_mod);
+    PUBLISH(heat_mod);
     PUBLISH(heat_sp);
     PUBLISH(burnerW);
     PUBLISH(returnW);
     PUBLISH(pressure);
     PUBLISH(S3avg);
-    PUBLISH(S3long);
     
     //save state to RTC memory
     uint32_t *dp;         WRITE_PERI_REG(RTC_ADDR+ 4,mode     ); //int
@@ -517,17 +518,25 @@ void vTimerCallback( TimerHandle_t xTimer ) {
         switch (timeIndex) { //check answers
             case 0: temp[BW]=(float)(message&0x0000ffff)/256; break;
             case 3:
+                old_stateflg=stateflg;
                 stateflg=(message&0x0000007f);
                 if (stateflg&0xa) {
+                    heat_mod=1.0; //at this point it is a multiplier
                     cur_heat1.value.int_value=pump_off_time?2:1; //present heater on but pump off as cur_heat1=2 COOL
-                } else cur_heat1.value.int_value=0;
+                } else {
+                    if (old_stateflg&0xa) heat_mod=0.0;
+                    cur_heat1.value.int_value=0;
+                }
                 homekit_characteristic_notify(&cur_heat1,HOMEKIT_UINT8(cur_heat1.value.int_value));
                 break;
             case 5: errorflg=       (message&0x00003f00)/256; break;
             case 6: pressure=(float)(message&0x0000ffff)/256; break;
             case 7: temp[DW]=(float)(message&0x0000ffff)/256; break;
             case 8: temp[RW]=(float)(message&0x0000ffff)/256; break;
-            case 9: curr_mod=(float)(message&0x0000ffff)/256; break;
+            case 9:
+                curr_mod=(float)(message&0x0000ffff)/256;
+                if (curr_mod==70.0) heat_mod=0.0; else heat_mod*=curr_mod;
+                break;
             default: break;
         }
     } else {
