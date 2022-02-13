@@ -51,6 +51,9 @@
  #error LED_PIN is not specified
 #endif
 
+#define DEFAULT1 21.0
+#define DEFAULT2 21.0
+
 int idx; //the domoticz base index
 #define PUBLISH(name) do {int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"%.1f\"}", idx+name##_ix, name##_fv); \
                             if (n<0) printf("MQTT publish of %s failed because %s\n",#name,MQTT_CLIENT_ERROR(n)); \
@@ -101,13 +104,13 @@ void tgt_temp1_set(homekit_value_t value);
 void tgt_temp2_set(homekit_value_t value);
 homekit_characteristic_t tgt_heat1 = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE,  3 );
 homekit_characteristic_t cur_heat1 = HOMEKIT_CHARACTERISTIC_(CURRENT_HEATING_COOLING_STATE, 0 );
-homekit_characteristic_t tgt_temp1 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         21.5, .setter=tgt_temp1_set );
+homekit_characteristic_t tgt_temp1 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,     DEFAULT1, .setter=tgt_temp1_set );
 homekit_characteristic_t cur_temp1 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         1.0 );
 homekit_characteristic_t dis_temp1 = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY_UNITS,     0 );
 
 homekit_characteristic_t tgt_heat2 = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE,  3 );
 homekit_characteristic_t cur_heat2 = HOMEKIT_CHARACTERISTIC_(CURRENT_HEATING_COOLING_STATE, 0 );
-homekit_characteristic_t tgt_temp2 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,         20.5, .setter=tgt_temp2_set );
+homekit_characteristic_t tgt_temp2 = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE,     DEFAULT2, .setter=tgt_temp2_set );
 homekit_characteristic_t cur_temp2 = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE,         2.0 );
 homekit_characteristic_t dis_temp2 = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY_UNITS,     0 );
 
@@ -272,12 +275,15 @@ void temp_task(void *argv) {
 
 #define RTC_ADDR    0x600013B0
 #define RTC_MAGIC   0xaabecede
+#define PAST_TGT_N  10
+#define BOOSTLEVEL  25.0
 enum    modes { STABLE, HEAT, EVAL };
 int     mode=EVAL,peak_time=15; //after update, evaluate only 15 minutes
-float   peak_temp=0,prev_setp=21.5,setpoint2=20.5,heat_sp=35;
+float   peak_temp=0,prev_setp=DEFAULT1,setpoint2=DEFAULT2,heat_sp=35;
+float   stable_tgt_temp1=DEFAULT1, past_tgt_temp1[PAST_TGT_N];
 float   curr_mod=0,heat_mod=0,pressure=0;
 time_t  heat_till=0;
-int     time_set=0,time_on=0,stateflg=0,old_stateflg=0,errorflg=0;
+int     time_set=0,time_on=0,stateflg=0,errorflg=0;
 int     heat_on, boost=0;
 int heater(uint32_t seconds) {
     if (!time_set) return 0; //need reliable time
@@ -307,11 +313,28 @@ int heater(uint32_t seconds) {
 
     //heater1 logic
     float setpoint1=tgt_temp1.value.float_value;
-    if (setpoint1>21.5) boost++; else boost=0;
+    int i,j,stable=0;
+    if (setpoint1<BOOSTLEVEL) { //shift history left
+        for (i=0;i<PAST_TGT_N-1;i++) past_tgt_temp1[i]=past_tgt_temp1[i+1];
+        past_tgt_temp1[i]=setpoint1;
+    }
+    for (i=0; i<PAST_TGT_N; i++)     if (past_tgt_temp1[i]==stable_tgt_temp1) stable++;
+    for (j=0; j<PAST_TGT_N; j++) {
+        int newer=0;
+        for (i=0; i<PAST_TGT_N; i++) if (past_tgt_temp1[i]==past_tgt_temp1[j]) newer++;
+        if (newer>stable) {
+            stable_tgt_temp1=past_tgt_temp1[j]; stable=newer;
+        }
+        printf("%d: value: %.1f  newer: %d\n",j,past_tgt_temp1[j],newer);
+    }
+    printf("   value: %.1f stable: %d\n",stable_tgt_temp1,stable);
+    
+    if (setpoint1>=BOOSTLEVEL) boost++; else boost=0;
     if (boost>30) {
-        tgt_temp1.value.float_value=21.5;
+        setpoint1=tgt_temp1.value.float_value=stable_tgt_temp1;
         homekit_characteristic_notify(&tgt_temp1,HOMEKIT_FLOAT(tgt_temp1.value.float_value));
     }
+PUBLISH(tgt_temp1); //debug only
     if (setpoint1!=prev_setp) {
         if (setpoint1>prev_setp) mode=STABLE; else mode=EVAL;
         prev_setp=setpoint1;
@@ -381,7 +404,7 @@ int heater(uint32_t seconds) {
     dp=(void*)&prev_setp; WRITE_PERI_REG(RTC_ADDR+16,*dp      ); //float
     dp=(void*)&peak_temp; WRITE_PERI_REG(RTC_ADDR+20,*dp      ); //float
                           WRITE_PERI_REG(RTC_ADDR+24,peak_time); //int
-    dp=(void*)&tgt_temp1.value.float_value; WRITE_PERI_REG(RTC_ADDR+28,*dp      ); //float
+    dp=(void*)&stable_tgt_temp1;            WRITE_PERI_REG(RTC_ADDR+28,*dp      ); //float
     dp=(void*)&tgt_temp2.value.float_value; WRITE_PERI_REG(RTC_ADDR+32,*dp      ); //float
     dp=(void*)&setpoint2; WRITE_PERI_REG(RTC_ADDR+36,*dp      ); //float
     dp=(void*)&S3total;   WRITE_PERI_REG(RTC_ADDR+40,*dp      ); //float
@@ -518,15 +541,12 @@ void vTimerCallback( TimerHandle_t xTimer ) {
         switch (timeIndex) { //check answers
             case 0: temp[BW]=(float)(message&0x0000ffff)/256; break;
             case 3:
-                old_stateflg=stateflg;
+                heat_mod=0.0;
                 stateflg=(message&0x0000007f);
-                if (stateflg&0xa) {
+                if ((stateflg&0xa)==0xa) {
                     heat_mod=1.0; //at this point it is a multiplier
                     cur_heat1.value.int_value=pump_off_time?2:1; //present heater on but pump off as cur_heat1=2 COOL
-                } else {
-                    if (old_stateflg&0xa) heat_mod=0.0;
-                    cur_heat1.value.int_value=0;
-                }
+                } else cur_heat1.value.int_value=0;
                 homekit_characteristic_notify(&cur_heat1,HOMEKIT_UINT8(cur_heat1.value.int_value));
                 break;
             case 5: errorflg=       (message&0x00003f00)/256; break;
