@@ -313,7 +313,7 @@ int heater(uint32_t seconds) {
 
     //heater1 logic
     float setpoint1=tgt_temp1.value.float_value;
-    int i,j,stable=0;
+    int   i,j,stable=0;
     if (setpoint1<BOOSTLEVEL) { //shift history left
         for (i=0;i<PAST_TGT_N-1;i++) past_tgt_temp1[i]=past_tgt_temp1[i+1];
         past_tgt_temp1[i]=setpoint1;
@@ -325,16 +325,13 @@ int heater(uint32_t seconds) {
         if (newer>stable) {
             stable_tgt_temp1=past_tgt_temp1[j]; stable=newer;
         }
-        printf("%d: value: %.1f  newer: %d\n",j,past_tgt_temp1[j],newer);
     }
-    printf("   value: %.1f stable: %d\n",stable_tgt_temp1,stable);
     
     if (setpoint1>=BOOSTLEVEL) boost++; else boost=0;
     if (boost>30) {
         setpoint1=tgt_temp1.value.float_value=stable_tgt_temp1;
         homekit_characteristic_notify(&tgt_temp1,HOMEKIT_FLOAT(tgt_temp1.value.float_value));
     }
-PUBLISH(tgt_temp1); //debug only
     if (setpoint1!=prev_setp) {
         if (setpoint1>prev_setp) mode=STABLE; else mode=EVAL;
         prev_setp=setpoint1;
@@ -386,8 +383,8 @@ PUBLISH(tgt_temp1); //debug only
     if (time_on<0) time_on=0;
     printf("S1=%7.4f S2=%7.4f S3=%7.4f f=%6.1f time-on=%3d peak_temp=%7.4f peak_time=%2d<%2d ST=%02x mode=%d%s\n", \
             S1avg,S2avg,S3avg,ffactor,time_on,peak_temp,peak_time,eval_time,stateflg,mode,(mode==1)?(str+5):"");
-    printf("Heater@%-4d                     %s => heat_sp:%4.1f h1:%d + h2:%d = on:%d\n", \
-            (seconds+10)/60,strtm,heat_sp,heater1,heater2,result);
+    printf("Heater@%-4d  stable:%4.1f %s   %s => heat_sp:%4.1f h1:%d + h2:%d = on:%d\n", \
+            (seconds+10)/60,stable_tgt_temp1,boost?"boost":"     ",strtm,heat_sp,heater1,heater2,result);
     PUBLISH(S1avg);
     PUBLISH(S2avg);
     PUBLISH(heat_mod);
@@ -434,6 +431,7 @@ void init_task(void *argv) {
             prev_setp,ffactor,peak_time,peak_temp,mode,ctime(&heat_till));
     PUBLISH(tgt_temp1);
     PUBLISH(tgt_temp2);
+    for (int i=0; i<PAST_TGT_N; i++) past_tgt_temp1[i]=tgt_temp1.value.float_value;
     S1temp[0]=22;S2temp[0]=22;
     
     setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1); tzset();
