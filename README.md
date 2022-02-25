@@ -42,6 +42,19 @@ later... for now see the code
 
 ## Version history
 
+- 0.8.0 make heating countdown on active
+heater must be modulating to count down time
+- 0.7.9 initialise past tgt values
+and remove debug printing
+- 0.7.8 dynamic setpoint with booster
+make sure that booster setting dynamics do not get taken for new
+setpoint
+fix heat_mod logic
+debug printf to be removed later
+- 0.7.7 changed S3long and modulation reports
+S3long only reported at reset point
+heat_mod is curr_mod with overlay
+heat_mod is only reported if state is or was 0x0a and discarding 70%
 - 0.7.0 - 0.7.6 introducing MQTT updates to Domoticz
 an alert for ERR flag field
 many temperatures as well as modulation and pressure

@@ -327,10 +327,11 @@ int heater(uint32_t seconds) {
         }
     }
     
-    if (setpoint1>=BOOSTLEVEL) boost++; else boost=0;
+    if (setpoint1<BOOSTLEVEL) boost=0; else if (heat_mod) boost++;
     if (boost>30) {
         setpoint1=tgt_temp1.value.float_value=stable_tgt_temp1;
         homekit_characteristic_notify(&tgt_temp1,HOMEKIT_FLOAT(tgt_temp1.value.float_value));
+        PUBLISH(tgt_temp1); //to refresh the report to MQTT
     }
     if (setpoint1!=prev_setp) {
         if (setpoint1>prev_setp) mode=STABLE; else mode=EVAL;
@@ -368,7 +369,7 @@ int heater(uint32_t seconds) {
             peak_temp=S1avg;
             peak_time=0;
         } else if ( setpoint1-S1avg>0 ){
-            time_on--;
+            if (heat_mod) time_on--;
             heater1=1;
         } else {
             mode=STABLE;
