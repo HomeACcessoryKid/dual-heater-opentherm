@@ -11,6 +11,7 @@
 // TODO: if heater wants ON, but boiler-lockout active, do not count down time
 // TODO: apply hysteresis to S2avg
 // TODO: make factor depend on S3 long avg
+// TODO: make holdback timer progress progress faster if avg<peak
 #include <stdio.h>
 #include <espressif/esp_wifi.h>
 #include <espressif/esp_sta.h>
@@ -51,8 +52,8 @@
  #error LED_PIN is not specified
 #endif
 
-#define DEFAULT1 21.0
-#define DEFAULT2 21.0
+#define DEFAULT1 19.0
+#define DEFAULT2 19.0
 
 int idx; //the domoticz base index
 #define PUBLISH(name) do {int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"%.1f\"}", idx+name##_ix, name##_fv); \
@@ -306,6 +307,7 @@ int heater(uint32_t seconds) {
     //heater2 logic
     if (tgt_temp2.value.float_value>setpoint2) setpoint2+=0.0625;
     if (tgt_temp2.value.float_value<setpoint2) setpoint2-=0.0625;
+    if (setpoint2-S2avg < -0.125) setpoint2=S2avg-0.125; //prevent it takes very long to actually start heating after turn up
     if (setpoint2-S2avg>0) {
         heat_sp=35+(setpoint2-S2avg)*16; if (heat_sp>75) heat_sp=75;
         heater2=1;

@@ -42,6 +42,8 @@ later... for now see the code
 
 ## Version history
 
+- 0.8.1 change default settings to 19 degrees Celsius
+and ramp up time for heater2
 - 0.8.0 make heating countdown on active
 heater must be modulating to count down time
 - 0.7.9 initialise past tgt values
