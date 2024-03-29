@@ -8,10 +8,7 @@
  *  UDPlogger is used to have remote logging
  *  LCM is enabled in case you want remote updates
  */
-// TODO: apply hysteresis to S2avg
 // TODO: make factor depend on S3 long avg
-// TODO: make holdback timer progress progress faster if avg<peak
-// TODO: when only less sensors found, reset after 5 minutes
 #include <stdio.h>
 #include <espressif/esp_wifi.h>
 #include <espressif/esp_sta.h>
@@ -254,10 +251,16 @@ void temp_task(void *argv) {
     ds18b20_addr_t addrs[SENSORS];
     float temps[SENSORS];
     float old_t1,old_t2,old_t3;
-    int sensor_count=0,id;
+    int sensor_count=0,id,fail=0;
 
     while( (sensor_count=ds18b20_scan_devices(SENSOR_PIN, addrs, SENSORS)) != SENSORS) {
         UDPLUS("Only found %d sensors\n",sensor_count);
+        if (fail++>50) {
+            printf("restarting because can't find enough sensors\n");
+            mqtt_client_publish("{\"idx\":%d,\"nvalue\":4,\"svalue\":\"Heater No Sensors\"}", idx);
+            vTaskDelay(500/portTICK_PERIOD_MS);
+            sdk_system_restart();  //#include <rboot-api.h>
+        }
         vTaskDelay(BEAT*1000/portTICK_PERIOD_MS);
     }
 
@@ -284,7 +287,7 @@ void temp_task(void *argv) {
 #define BOOSTLEVEL  25.0
 enum    modes { STABLE, HEAT, EVAL };
 int     mode=EVAL,peak_time=15; //after update, evaluate only 15 minutes
-float   peak_temp=0,prev_setp=DEFAULT1,setpoint2=DEFAULT2,heat_sp=35;
+float   peak_temp=0,prev_setp=DEFAULT1,setpoint2=DEFAULT2,hystsetpoint2=DEFAULT2,heat_sp=35;
 float   stable_tgt_temp1=DEFAULT1, past_tgt_temp1[PAST_TGT_N];
 float   curr_mod=0,heat_mod=0,pressure=0;
 time_t  heat_till=0;
@@ -309,11 +312,13 @@ int heater(uint32_t seconds) {
     sprintf(strtm,"DST%dwd%dyd%-3d %2d|%02d:%02d:%02d.%06d",tm->tm_isdst,tm->tm_wday,tm->tm_yday,tm->tm_mday, \
             tm->tm_hour,tm->tm_min,tm->tm_sec,(int)tv.tv_usec);
     //heater2 logic
-    if (tgt_temp2.value.float_value>setpoint2) setpoint2+=0.0625;
-    if (tgt_temp2.value.float_value<setpoint2) setpoint2-=0.0625;
+    if (tgt_temp2.value.float_value>setpoint2) setpoint2+=0.0625; //slow adjust up
+    if (tgt_temp2.value.float_value<setpoint2) setpoint2-=0.0625; //slow adjust down
     if (setpoint2-S2avg < -0.125) setpoint2=S2avg-0.125; //prevent it takes very long to actually start heating after turn up
-    if (setpoint2-S2avg>0) {
-        heat_sp=35+(setpoint2-S2avg)*16; if (heat_sp>75) heat_sp=75;
+    if (setpoint2-S2avg>   0) hystsetpoint2=setpoint2+0.4; //below setpoint, try to overshoot
+    if (setpoint2-S2avg<-0.1) hystsetpoint2=setpoint2;     //0.1 above the setup, wait till we drop below again
+    if (hystsetpoint2-S2avg>0) {
+        heat_sp=35+(hystsetpoint2-S2avg)*16; if (heat_sp>75) heat_sp=75;
         heater2=1;
     } else heat_sp=35;//request lowest possible output for floor heating while not heating radiators explicitly
 
@@ -353,6 +358,7 @@ int heater(uint32_t seconds) {
             peak_temp=S1avg;
             peak_time=0;
         }
+        if (S1avg<peak_temp) peak_time++; //double fast countdown if S1Avg temp < peak temp
     }
     if (mode==STABLE) {
         if (tm->tm_hour<7 || tm->tm_hour>=22) { //night time preparing for morning warmup
@@ -574,10 +580,11 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     }
     
     //errorflg=(seconds/600)%2; //test trick to change outcome every 10 minutes
+    if (seconds%3600==0) push-=4; //force a OK report every hour, if push was 3 then it will become -1 like at start
     if (seconds%60==5) {
         if (errorflg) { //publish a RED (4) ALERT on domoticz
             if (push>0) {
-                int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":4,\"svalue\":\"Heater ERR: 0x%02X\"}", idx, errorflg);
+                int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":3,\"svalue\":\"Heater ERR: 0x%02X\"}", idx, errorflg);
                 if (n<0) printf("MQTT publish of ALERT failed because %s\n",MQTT_CLIENT_ERROR(n)); else push--;
                 if (push==0) push=-2;
             }
@@ -626,6 +633,8 @@ void ping_task(void *argv) {
         }
         if (count==0) {
             printf("restarting because can't ping home-hub\n");
+            mqtt_client_publish("{\"idx\":%d,\"nvalue\":2,\"svalue\":\"Heater No Ping\"}", idx);
+            vTaskDelay(500/portTICK_PERIOD_MS);
             sdk_system_restart();  //#include <rboot-api.h>
         }
         vTaskDelay(delay*(1000/portTICK_PERIOD_MS));
