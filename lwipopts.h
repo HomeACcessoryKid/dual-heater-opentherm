@@ -32,7 +32,14 @@
 #ifndef __LWIPOPTS_H__
 #define __LWIPOPTS_H__
 
+/*
+Addition to standard lwipopts.h
+for the purpose of ping support */
 
+#define LWIP_RAW                            1
+#define DEFAULT_RAW_RECVMBOX_SIZE               5
+
+/* end of addition to standard lwipopts.h */
 
 
 /*

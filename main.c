@@ -8,10 +8,10 @@
  *  UDPlogger is used to have remote logging
  *  LCM is enabled in case you want remote updates
  */
-// TODO: if heater wants ON, but boiler-lockout active, do not count down time
 // TODO: apply hysteresis to S2avg
 // TODO: make factor depend on S3 long avg
 // TODO: make holdback timer progress progress faster if avg<peak
+// TODO: when only less sensors found, reset after 5 minutes
 #include <stdio.h>
 #include <espressif/esp_wifi.h>
 #include <espressif/esp_sta.h>
@@ -34,6 +34,8 @@
 #include <espressif/esp8266/eagle_soc.h>
 #include "mqtt-client.h"
 #include <sysparam.h>
+#include "ping.h"
+#include <rboot-api.h>
 
 #ifndef VERSION
  #error You must set VERSION=x.y.z to match github version tag x.y.z
@@ -81,6 +83,8 @@ int idx; //the domoticz base index
 #define     S3avg_ix 10
 #define    S3long_fv S3long
 #define    S3long_ix 11
+
+char    *pinger_target=NULL;
 
 /* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS =============================================================== */
 // add this section to make your device OTA capable
@@ -371,7 +375,7 @@ int heater(uint32_t seconds) {
             peak_temp=S1avg;
             peak_time=0;
         } else if ( setpoint1-S1avg>0 ){
-            if (heat_mod) time_on--;
+            if (heat_mod) time_on--; else heat_till+=60; //only when burner on, count progress else shift end time
             heater1=1;
         } else {
             mode=STABLE;
@@ -602,6 +606,32 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     timeIndex++; if (timeIndex==BEAT) timeIndex=0;
 } //this is a timer that restarts every 1 second
 
+void ping_task(void *argv) {
+    int count=120,delay=1; //seconds
+    ping_result_t res;
+    ip_addr_t to_ping;
+    inet_aton(pinger_target,&to_ping);
+    
+    printf("Pinging IP %s\n", ipaddr_ntoa(&to_ping));
+    while(1){
+        ping_ip(to_ping, &res);
+
+        if (res.result_code == PING_RES_ECHO_REPLY) {
+            count+=20; delay+=5;
+            if (count>300) count=300; if (delay>60) delay=60;
+            printf("good ping from %s %u ms -> count: %d s\n", ipaddr_ntoa(&res.response_ip), res.response_time_ms, count);
+        } else {
+            count--; delay=1;
+            printf("failed ping err %d -> count: %d s\n", res.result_code, count);
+        }
+        if (count==0) {
+            printf("restarting because can't ping home-hub\n");
+            sdk_system_restart();  //#include <rboot-api.h>
+        }
+        vTaskDelay(delay*(1000/portTICK_PERIOD_MS));
+    }
+}
+
 mqtt_config_t mqttconf=MQTT_DEFAULT_CONFIG;
 char error[]="error";
 static void ota_string() {
@@ -612,11 +642,14 @@ static void ota_string() {
         mqttconf.user=strtok(NULL,";");
         mqttconf.pass=strtok(NULL,";");
         dmtczbaseidx1=strtok(NULL,";");
+        //pinger_target=strtok(NULL,";");
     }
     if (mqttconf.host==NULL) mqttconf.host=error;
     if (mqttconf.user==NULL) mqttconf.user=error;
     if (mqttconf.pass==NULL) mqttconf.pass=error;
     if (dmtczbaseidx1==NULL) idx=1000; else idx=atoi(dmtczbaseidx1);
+    //if (pinger_target==NULL) pinger_target=error;
+    pinger_target="192.168.178.100";
 }
 
 homekit_server_config_t config;
@@ -650,6 +683,7 @@ void device_init() {
     xQueue = xQueueCreate(1, sizeof(uint32_t));
     xTaskCreate(temp_task,"Temp", 512, NULL, 1, &tempTask);
     xTaskCreate(init_task,"Time", 512, NULL, 6, NULL);
+    xTaskCreate(ping_task,"PingT",512, NULL, 1, NULL);
     xTimer=xTimerCreate( "Timer", 1000/portTICK_PERIOD_MS, pdTRUE, (void*)0, vTimerCallback);
     xTimerStart(xTimer, 0);
   }

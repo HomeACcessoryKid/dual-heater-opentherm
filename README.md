@@ -42,6 +42,9 @@ later... for now see the code
 
 ## Version history
 
+- 0.8.2 ping guard and don't count time when burner not on
+ping the homekit hub IP and if more than 300 seconds/pings no response, reset
+don't count now also pushes heat_till time forward
 - 0.8.1 change default settings to 19 degrees Celsius
 and ramp up time for heater2
 - 0.8.0 make heating countdown on active
