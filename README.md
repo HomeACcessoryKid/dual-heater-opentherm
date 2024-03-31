@@ -42,6 +42,9 @@ later... for now see the code
 
 ## Version history
 
+- 0.8.4 tweaking Alert MQTT messages
+To force a different message every time
+To allow more time to send MQTT message before a reset
 - 0.8.3 hysteresis, double countspeed, no-sensor-reset, force OK MQTT
 Temperature 2 is using hysteresis to force it just beyond setpoint
 When T1 is below peaktemp during EVAL, countdown double fast

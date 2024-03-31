@@ -258,7 +258,7 @@ void temp_task(void *argv) {
         if (fail++>50) {
             printf("restarting because can't find enough sensors\n");
             mqtt_client_publish("{\"idx\":%d,\"nvalue\":4,\"svalue\":\"Heater No Sensors\"}", idx);
-            vTaskDelay(500/portTICK_PERIOD_MS);
+            vTaskDelay(3000/portTICK_PERIOD_MS);
             sdk_system_restart();  //#include <rboot-api.h>
         }
         vTaskDelay(BEAT*1000/portTICK_PERIOD_MS);
@@ -590,7 +590,7 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             }
         } else { //publish a GREY (0) clean ALERT on domoticz
             if (push<0) {
-                int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"Heater OK\"}", idx);
+                int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"Heater OK %d\"}", idx, seconds/60);
                 if (n<0) printf("MQTT publish of ALERT failed because %s\n",MQTT_CLIENT_ERROR(n)); else push++;
                 if (push==0) push=3;            
             }
@@ -634,7 +634,7 @@ void ping_task(void *argv) {
         if (count==0) {
             printf("restarting because can't ping home-hub\n");
             mqtt_client_publish("{\"idx\":%d,\"nvalue\":2,\"svalue\":\"Heater No Ping\"}", idx);
-            vTaskDelay(500/portTICK_PERIOD_MS);
+            vTaskDelay(3000/portTICK_PERIOD_MS);
             sdk_system_restart();  //#include <rboot-api.h>
         }
         vTaskDelay(delay*(1000/portTICK_PERIOD_MS));
