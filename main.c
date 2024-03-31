@@ -471,7 +471,7 @@ void init_task(void *argv) {
         } while(0)
 static TaskHandle_t tempTask = NULL;
 int timeIndex=0,switch_state=0,pump_off_time=0,retrigger=0;
-int push=-1;
+int push=-2;
 TimerHandle_t xTimer;
 void vTimerCallback( TimerHandle_t xTimer ) {
     uint32_t seconds = ( uint32_t ) pvTimerGetTimerID( xTimer );
@@ -580,9 +580,8 @@ void vTimerCallback( TimerHandle_t xTimer ) {
     }
     
     //errorflg=(seconds/600)%2; //test trick to change outcome every 10 minutes
-    if (seconds%3600==0) push-=4; //force a OK report every hour, if push was 3 then it will become -1 like at start
     if (seconds%60==5) {
-        if (errorflg) { //publish a RED (4) ALERT on domoticz
+        if (errorflg) { //publish a ORANGE (3) ALERT on domoticz
             if (push>0) {
                 int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":3,\"svalue\":\"Heater ERR: 0x%02X\"}", idx, errorflg);
                 if (n<0) printf("MQTT publish of ALERT failed because %s\n",MQTT_CLIENT_ERROR(n)); else push--;
@@ -590,13 +589,16 @@ void vTimerCallback( TimerHandle_t xTimer ) {
             }
         } else { //publish a GREY (0) clean ALERT on domoticz
             if (push<0) {
-                int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"Heater OK %d\"}", idx, seconds/60);
+                int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"Heater OK (again) %d\"}", idx, seconds/60);
                 if (n<0) printf("MQTT publish of ALERT failed because %s\n",MQTT_CLIENT_ERROR(n)); else push++;
                 if (push==0) push=3;            
             }
         }
     }
-
+//  if (seconds%3600==3599) { //force a alive report every hour
+//      int n=mqtt_client_publish("{\"idx\":%d,\"nvalue\":0,\"svalue\":\"Heater alive %d\"}", idx, seconds/60);    
+//  }
+//  
     if (seconds%60==50) { //allow 6 temperature measurments to make sure all info is loaded
         heat_on=0;
         cur_heat2.value.int_value=heater(seconds); //sets heat_sp and returns heater result, 0, 1 or 2

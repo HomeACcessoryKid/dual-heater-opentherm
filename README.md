@@ -42,6 +42,9 @@ later... for now see the code
 
 ## Version history
 
+- 0.8.5 more MQTT Alert tweaking
+two initial alerts will always report at reboot
+hourly report suppressed for now
 - 0.8.4 tweaking Alert MQTT messages
 To force a different message every time
 To allow more time to send MQTT message before a reset
